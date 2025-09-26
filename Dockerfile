@@ -3,24 +3,21 @@ FROM node:20-slim as frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy all frontend files
+# Copy only package files first
+COPY frontend/package.json frontend/package-lock.json ./
+
+# Clean install dependencies
+RUN npm ci
+
+# Now copy the rest of the frontend files
 COPY frontend/ ./
-
-# Debug: List files
-RUN ls -la
-
-# Install dependencies
-RUN npm install
-
-# Debug: Show TypeScript version
-RUN npx tsc --version
 
 # Set environment for build
 ENV NODE_ENV=production
 ENV VITE_API_URL=http://localhost:8010
 
-# Build with verbose output
-RUN npm run build --verbose
+# Build without TypeScript checks first
+RUN npm run build || npm run build --verbose
 
 # Stage 2: Final image
 FROM python:3.11-slim
