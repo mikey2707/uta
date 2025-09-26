@@ -19,6 +19,7 @@ import {
 import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
 import { CloseIcon, DownloadIcon } from '@chakra-ui/icons'
+import { API_URL } from '../config'
 
 interface ProcessedFile {
   filename: string
@@ -69,8 +70,8 @@ const ImageConverter = () => {
       if (width) formData.append('width', width.toString())
       if (height) formData.append('height', height.toString())
 
-      const response = await axios.post('http://localhost:8000/api/convert-image', formData)
-      setProcessedFiles(response.data.files)
+      const response = await axios.post(`${API_URL}/api/convert-image`, formData)
+      setProcessedFiles(response.data.files || [])
       
       toast({
         title: 'Success',
@@ -80,6 +81,7 @@ const ImageConverter = () => {
         isClosable: true,
       })
     } catch (error) {
+      console.error('Conversion error:', error)
       toast({
         title: 'Error',
         description: 'Failed to convert images',
@@ -95,7 +97,7 @@ const ImageConverter = () => {
 
   const downloadFile = async (file: ProcessedFile) => {
     try {
-      const response = await axios.get(`http://localhost:8000${file.url}`, {
+      const response = await axios.get(`${API_URL}${file.url}`, {
         responseType: 'blob'
       })
       const url = window.URL.createObjectURL(new Blob([response.data]))
@@ -107,6 +109,7 @@ const ImageConverter = () => {
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
     } catch (error) {
+      console.error('Download error:', error)
       toast({
         title: 'Error',
         description: 'Failed to download file',
