@@ -16,3 +16,20 @@ services:
       - PYTHONUNBUFFERED=1
       - NODE_ENV=production
     restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tools.rule=Host(`tools.mikey.host`)"
+      - "traefik.http.routers.tools.entrypoints=websecure"
+      - "traefik.http.routers.tools.tls=true"
+      - "traefik.http.services.tools.loadbalancer.server.port=3000"
+      # API route
+      - "traefik.http.routers.tools-api.rule=Host(`tools.mikey.host`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.tools-api.entrypoints=websecure"
+      - "traefik.http.routers.tools-api.tls=true"
+      - "traefik.http.services.tools-api.loadbalancer.server.port=8000"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
