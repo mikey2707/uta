@@ -6,12 +6,14 @@ services:
       context: https://github.com/mikey2707/uta.git#main
       dockerfile: Dockerfile
     ports:
-      - "8010:8000"  # Single port for both frontend and API
+      - "8010:8000"  # Backend API
+      - "3010:3000"  # Frontend
     volumes:
       - /var/lib/docker/volumes/unified-tool/_data/uploads:/app/backend/uploads
       - /var/lib/docker/volumes/unified-tool/_data/outputs:/app/backend/outputs
       - /var/lib/docker/volumes/unified-tool/_data/downloads:/app/backend/downloads
     environment:
       - PYTHONUNBUFFERED=1
+      - VITE_API_URL=http://10.0.0.61:8010  # Use your actual IP here
       - NODE_ENV=production
     restart: unless-stopped
