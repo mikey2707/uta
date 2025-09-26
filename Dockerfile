@@ -3,21 +3,28 @@ FROM node:20-slim as frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy package files
+# Copy package files first
 COPY frontend/package*.json ./
 
-# Install dependencies with legacy peer deps flag to avoid conflicts
-RUN npm install --legacy-peer-deps
+# Install dependencies with specific flags to handle potential issues
+RUN npm install --legacy-peer-deps --force
 
-# Copy the rest of the frontend files
-COPY frontend/ ./
+# Copy TypeScript config
+COPY frontend/tsconfig.json ./
+COPY frontend/tsconfig.node.json ./
+COPY frontend/vite.config.ts ./
 
-# Add build arguments
-ARG VITE_API_URL
-ENV VITE_API_URL=${VITE_API_URL}
+# Copy source files
+COPY frontend/src ./src
+COPY frontend/public ./public
+COPY frontend/index.html ./
 
-# Build with CI=false to ignore warnings
-RUN CI=false npm run build
+# Set environment for build
+ENV NODE_ENV=production
+ENV VITE_API_URL=http://localhost:8010
+
+# Build the application
+RUN npm run build || (cat /app/frontend/npm-debug.log && exit 1)
 
 # Stage 2: Final image
 FROM python:3.11-slim
