@@ -17,7 +17,7 @@ ENV NODE_ENV=production
 ENV VITE_API_URL=http://localhost:8010
 
 # Build without TypeScript checks first
-RUN npm run build || npm run build --verbose
+RUN npm run build
 
 # Stage 2: Final image
 FROM python:3.11-slim
@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     nodejs \
     npm \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install serve globally for frontend

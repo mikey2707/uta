@@ -6,4 +6,5 @@ click==8.1.7
 tqdm==4.66.2
 huggingface-hub==0.20.3
 rembg
+onnxruntime
 yt-dlp==2025.09.23
