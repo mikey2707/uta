@@ -6,19 +6,20 @@ WORKDIR /app/frontend
 # Copy package files
 COPY frontend/package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies with legacy peer deps flag to avoid conflicts
+RUN npm install --legacy-peer-deps
 
 # Copy the rest of the frontend files
 COPY frontend/ ./
 
-# Set environment variable for production build
-ENV NODE_ENV=production
+# Add build arguments
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
 
-# Build the frontend
-RUN npm run build
+# Build with CI=false to ignore warnings
+RUN CI=false npm run build
 
-# Stage 2: Final image with both frontend and backend
+# Stage 2: Final image
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -45,10 +46,10 @@ RUN mkdir -p backend/uploads backend/outputs backend/downloads
 # Copy built frontend from previous stage
 COPY --from=frontend-builder /app/frontend/dist frontend/dist
 
-# Expose ports for both services
+# Expose ports
 EXPOSE 8000 3000
 
-# Copy the startup script
+# Copy and set up start script
 COPY start.sh .
 RUN chmod +x start.sh
 
