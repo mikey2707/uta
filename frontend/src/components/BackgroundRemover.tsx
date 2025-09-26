@@ -15,6 +15,7 @@ import {
 import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
 import { CloseIcon, DownloadIcon } from '@chakra-ui/icons'
+import { API_URL } from '../config'
 
 interface ProcessedFile {
   filename: string
@@ -59,8 +60,8 @@ const BackgroundRemover = () => {
         formData.append('files', file)
       })
 
-      const response = await axios.post('/api/remove-background', formData)
-      setProcessedFiles(response.data.files)
+      const response = await axios.post(`${API_URL}/api/remove-background`, formData)
+      setProcessedFiles(response.data.files || [])
       
       toast({
         title: 'Success',
@@ -70,6 +71,7 @@ const BackgroundRemover = () => {
         isClosable: true,
       })
     } catch (error) {
+      console.error('Background removal error:', error)
       toast({
         title: 'Error',
         description: 'Failed to remove background',
@@ -77,6 +79,7 @@ const BackgroundRemover = () => {
         duration: 3000,
         isClosable: true,
       })
+      setProcessedFiles([])  // Reset on error
     } finally {
       setIsLoading(false)
       setProgress(100)
@@ -85,7 +88,7 @@ const BackgroundRemover = () => {
 
   const downloadFile = async (file: ProcessedFile) => {
     try {
-      const response = await axios.get(`http://localhost:8000${file.url}`, {
+      const response = await axios.get(`${API_URL}${file.url}`, {
         responseType: 'blob'
       })
       const url = window.URL.createObjectURL(new Blob([response.data]))
@@ -97,6 +100,7 @@ const BackgroundRemover = () => {
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
     } catch (error) {
+      console.error('Download error:', error)
       toast({
         title: 'Error',
         description: 'Failed to download file',
@@ -181,7 +185,7 @@ const BackgroundRemover = () => {
         />
       )}
 
-      {processedFiles.length > 0 && (
+      {processedFiles && processedFiles.length > 0 && (
         <Box>
           <Text fontWeight="medium" mb={2}>Processed Images:</Text>
           <SimpleGrid columns={[1, 2]} spacing={4}>
@@ -195,7 +199,7 @@ const BackgroundRemover = () => {
               >
                 <VStack spacing={4}>
                   <Image
-                    src={`http://localhost:8000${file.url}`}
+                    src={`${API_URL}${file.url}`}
                     alt={file.filename}
                     maxH="200px"
                     objectFit="contain"

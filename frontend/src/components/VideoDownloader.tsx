@@ -20,6 +20,7 @@ import {
   useColorModeValue
 } from '@chakra-ui/react'
 import axios from 'axios'
+import { API_URL } from '../config'
 
 interface VideoFormat {
   format_id: string
@@ -94,8 +95,12 @@ const VideoDownloader = () => {
 
     const interval = setInterval(async () => {
       try {
-        const response = await axios.get('http://localhost:8000/api/download-progress')
+        const response = await axios.get(`${API_URL}/api/download-progress`)
         const progressData = response.data
+
+        if (!progressData) {
+          return
+        }
 
         setDownloadProgress(progressData)
         
@@ -140,12 +145,17 @@ const VideoDownloader = () => {
         const formData = new FormData()
         formData.append('url', newUrl)
         
-        const response = await axios.post('/api/get-video-info', formData)
-        setVideoInfo(response.data)
-        if (response.data.formats.length > 0) {
-          setSelectedFormat(response.data.formats[0].format_id)
+        const response = await axios.post(`${API_URL}/api/get-video-info`, formData)
+        const data = response.data
+        if (!data || !data.formats) {
+          throw new Error('Invalid response data')
+        }
+        setVideoInfo(data)
+        if (data.formats.length > 0) {
+          setSelectedFormat(data.formats[0].format_id)
         }
       } catch (error) {
+        console.error('Video info error:', error)
         toast({
           title: 'Error',
           description: 'Failed to fetch video information',
@@ -153,6 +163,7 @@ const VideoDownloader = () => {
           duration: 3000,
           isClosable: true,
         })
+        setVideoInfo(null)
       } finally {
         setIsChecking(false)
       }
@@ -177,8 +188,13 @@ const VideoDownloader = () => {
       }
       formData.append('audio_only', isAudioOnly.toString())
 
-      const response = await axios.post('/api/download-video', formData)
-      setVideoInfo(prev => ({ ...prev!, download_path: response.data.download_path }))
+      const response = await axios.post(`${API_URL}/api/download-video`, formData)
+      const data = response.data
+      if (!data) {
+        throw new Error('Invalid response data')
+      }
+      
+      setVideoInfo(prev => prev ? { ...prev, download_path: data.download_path } : null)
       
       toast({
         title: 'Success',
@@ -188,6 +204,7 @@ const VideoDownloader = () => {
         isClosable: true,
       })
     } catch (error) {
+      console.error('Download error:', error)
       toast({
         title: 'Error',
         description: 'Failed to download',
@@ -195,7 +212,6 @@ const VideoDownloader = () => {
         duration: 3000,
         isClosable: true,
       })
-      console.error('Download error:', error)
       
       if (pollInterval) {
         clearInterval(pollInterval)
@@ -209,14 +225,19 @@ const VideoDownloader = () => {
     if (!videoInfo?.download_path) return
 
     try {
-      const downloadUrl = `/api/download/${encodeURIComponent(videoInfo.download_path)}`
+      const response = await axios.get(`${API_URL}/api/download/${encodeURIComponent(videoInfo.download_path)}`, {
+        responseType: 'blob'
+      })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
       const link = document.createElement('a')
-      link.href = downloadUrl
+      link.href = url
       link.download = videoInfo.download_path
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
     } catch (error) {
+      console.error('File download error:', error)
       toast({
         title: 'Error',
         description: 'Failed to download the file',
@@ -245,7 +266,7 @@ const VideoDownloader = () => {
         </Box>
       )}
 
-      {videoInfo && !isAudioOnly && (
+      {videoInfo && videoInfo.formats && !isAudioOnly && (
         <FormControl>
           <FormLabel>Quality</FormLabel>
           <Select 
@@ -276,6 +297,7 @@ const VideoDownloader = () => {
         colorScheme="blue"
         onClick={handleDownload}
         isLoading={isLoading}
+        isDisabled={!url || isChecking}
       >
         {isAudioOnly ? 'Download Audio' : 'Download Video'}
       </Button>
@@ -325,7 +347,7 @@ const VideoDownloader = () => {
           <VStack spacing={3} align="stretch">
             <Text fontWeight="bold">{videoInfo.title}</Text>
             <Text>Duration: {formatDuration(videoInfo.duration)}</Text>
-            {!isAudioOnly && (
+            {!isAudioOnly && videoInfo.thumbnail && (
               <Image src={videoInfo.thumbnail} maxH="200px" objectFit="contain" />
             )}
             {videoInfo.download_path && (
