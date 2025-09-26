@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+*.so
+
+# Node
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+
+# Uploads and outputs
+backend/uploads/*
+backend/outputs/*
+backend/downloads/*
+!backend/uploads/.gitkeep
+!backend/outputs/.gitkeep
+!backend/downloads/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

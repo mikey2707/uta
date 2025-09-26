@@ -1,0 +1,106 @@
+/* Reset styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Base styles */
+html,
+body,
+#root,
+.app-wrapper {
+  min-height: 100vh;
+  width: 100%;
+}
+
+/* Dark mode overrides */
+.chakra-ui-dark {
+  background-color: #1a202c !important;
+}
+
+.chakra-ui-dark body,
+.chakra-ui-dark #root,
+.chakra-ui-dark .app-wrapper,
+.chakra-ui-dark .chakra-container {
+  background-color: #1a202c !important;
+}
+
+/* Target the specific Chakra class */
+.chakra-ui-dark .css-1q1u1gq {
+  background: var(--chakra-colors-gray-800) !important;
+  border-color: var(--chakra-colors-gray-700) !important;
+}
+
+/* Dark mode border overrides */
+.chakra-ui-dark .main-card {
+  border-color: var(--chakra-colors-gray-700) !important;
+  background: var(--chakra-colors-gray-800) !important;
+}
+
+.chakra-ui-dark .chakra-tabs__tab-panel {
+  border-color: var(--chakra-colors-gray-700) !important;
+  background: var(--chakra-colors-gray-800) !important;
+}
+
+.chakra-ui-dark .chakra-tabs__tab {
+  border-color: var(--chakra-colors-gray-700) !important;
+}
+
+.chakra-ui-dark .chakra-tabs__tablist {
+  border-color: var(--chakra-colors-gray-700) !important;
+}
+
+/* Light mode overrides */
+.chakra-ui-light {
+  background-color: #ffffff;
+}
+
+.chakra-ui-light body,
+.chakra-ui-light #root,
+.chakra-ui-light .app-wrapper,
+.chakra-ui-light .chakra-container {
+  background-color: #ffffff;
+}
+
+/* Light mode specific class */
+.chakra-ui-light .css-1q1u1gq {
+  background: var(--chakra-colors-gray-50);
+  border-color: var(--chakra-colors-gray-200);
+}
+
+/* Ensure proper stacking context */
+#root {
+  isolation: isolate;
+  position: relative;
+}
+
+/* Force background color inheritance */
+.app-wrapper {
+  position: relative;
+  z-index: 0;
+}
+
+/* Ensure container background */
+.chakra-container {
+  position: relative;
+  z-index: 1;
+}
+
+/* Tab panel styles */
+.chakra-tabs__tab-panel {
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+/* Smooth transitions */
+body,
+#root,
+.app-wrapper,
+.chakra-container,
+.main-card,
+.chakra-tabs__tab,
+.chakra-tabs__tab-panel,
+.css-1q1u1gq {
+  transition: all 0.2s ease-in-out;
+}
