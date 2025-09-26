@@ -3,7 +3,7 @@ version: '3.8'
 services:
   app:
     build:
-      context: .
+      context: https://github.com/mikey2707/uta.git#main
       dockerfile: Dockerfile
     ports:
       - "8010:8000"  # Backend API
@@ -14,5 +14,6 @@ services:
       - /var/lib/docker/volumes/unified-tool/_data/downloads:/app/backend/downloads
     environment:
       - PYTHONUNBUFFERED=1
-      - VITE_API_URL=http://localhost:8010
+      - VITE_API_URL=http://localhost:8010  # Match the exposed backend port
+      - NODE_ENV=production
     restart: unless-stopped
