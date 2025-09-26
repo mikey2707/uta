@@ -25,12 +25,11 @@ RUN apt-get update && apt-get install -y \
 # Install serve globally for frontend
 RUN npm install -g serve
 
-# Copy backend requirements and install dependencies
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy backend files
+# Copy backend files first
 COPY backend/ backend/
+
+# Install Python dependencies
+RUN cd backend && pip install --no-cache-dir -r requirements.txt
 
 # Create necessary directories
 RUN mkdir -p backend/uploads backend/outputs backend/downloads
