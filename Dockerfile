@@ -23,12 +23,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and nodejs
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g serve \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,14 +46,14 @@ RUN cd backend && pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p backend/uploads backend/outputs backend/downloads
 
 # Copy built frontend from previous stage
-COPY --from=frontend-builder /app/frontend/dist backend/static
+COPY --from=frontend-builder /app/frontend/dist frontend/dist
 
-# Expose port
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 3000
 
 # Copy and set up start script
 COPY start.sh .
 RUN chmod +x start.sh
 
-# Start the service
+# Start the services
 CMD ["./start.sh"]
