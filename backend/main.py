@@ -26,7 +26,11 @@ app = FastAPI(title="Unified Tools API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins in production
+    allow_origins=[
+        "http://localhost:3010",
+        "http://10.0.0.201:3010",
+        "https://tools.mikey.host",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
