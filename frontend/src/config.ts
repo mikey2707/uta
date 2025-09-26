@@ -1,7 +1,8 @@
-// Get the current hostname from the browser
+// Use the current hostname for dynamic configuration
 const getBaseUrl = () => {
   const hostname = window.location.hostname;
-  return `http://${hostname}:8010`;  // Always use 8010 for API
+  const port = '8010';  // Always use 8010 for API
+  return `http://${hostname}:${port}`;
 };
 
 export const API_URL = getBaseUrl();
