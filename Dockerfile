@@ -10,13 +10,11 @@ COPY frontend/package*.json ./
 RUN npm install --legacy-peer-deps --force
 
 # Copy TypeScript config
-COPY frontend/tsconfig.json ./
-COPY frontend/tsconfig.node.json ./
+COPY frontend/tsconfig*.json ./
 COPY frontend/vite.config.ts ./
 
 # Copy source files
 COPY frontend/src ./src
-COPY frontend/public ./public
 COPY frontend/index.html ./
 
 # Set environment for build
@@ -24,7 +22,7 @@ ENV NODE_ENV=production
 ENV VITE_API_URL=http://localhost:8010
 
 # Build the application
-RUN npm run build || (cat /app/frontend/npm-debug.log && exit 1)
+RUN npm run build || (echo "Build failed" && exit 1)
 
 # Stage 2: Final image
 FROM python:3.11-slim
