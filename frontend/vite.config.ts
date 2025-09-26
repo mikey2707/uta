@@ -13,8 +13,5 @@ export default defineConfig({
     sourcemap: false,
     minify: 'terser',
     target: 'es2015'
-  },
-  define: {
-    'import.meta.env.VITE_API_URL': JSON.stringify(process.env.VITE_API_URL || 'http://localhost:8010'),
-  },
+  }
 })
