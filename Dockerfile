@@ -3,11 +3,19 @@ FROM node:20-slim as frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy frontend files
+# Copy package files
 COPY frontend/package*.json ./
+
+# Install dependencies
 RUN npm install
 
+# Copy the rest of the frontend files
 COPY frontend/ ./
+
+# Set environment variable for production build
+ENV NODE_ENV=production
+
+# Build the frontend
 RUN npm run build
 
 # Stage 2: Final image with both frontend and backend
@@ -25,7 +33,7 @@ RUN apt-get update && apt-get install -y \
 # Install serve globally for frontend
 RUN npm install -g serve
 
-# Copy backend files first
+# Copy backend files
 COPY backend/ backend/
 
 # Install Python dependencies
