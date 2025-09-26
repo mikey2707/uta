@@ -3,26 +3,24 @@ FROM node:20-slim as frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy package files first
-COPY frontend/package*.json ./
+# Copy all frontend files
+COPY frontend/ ./
 
-# Install dependencies with specific flags to handle potential issues
-RUN npm install --legacy-peer-deps --force
+# Debug: List files
+RUN ls -la
 
-# Copy TypeScript config
-COPY frontend/tsconfig*.json ./
-COPY frontend/vite.config.ts ./
+# Install dependencies
+RUN npm install
 
-# Copy source files
-COPY frontend/src ./src
-COPY frontend/index.html ./
+# Debug: Show TypeScript version
+RUN npx tsc --version
 
 # Set environment for build
 ENV NODE_ENV=production
 ENV VITE_API_URL=http://localhost:8010
 
-# Build the application
-RUN npm run build || (echo "Build failed" && exit 1)
+# Build with verbose output
+RUN npm run build --verbose
 
 # Stage 2: Final image
 FROM python:3.11-slim
