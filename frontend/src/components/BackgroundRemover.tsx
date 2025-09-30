@@ -60,8 +60,16 @@ const BackgroundRemover = () => {
         formData.append('files', file)
       })
 
+      console.log('Making API request to:', `${API_URL}/api/remove-background`)
       const response = await axios.post(`${API_URL}/api/remove-background`, formData)
-      setProcessedFiles(response.data.files || [])
+      console.log('API Response:', response.data)
+      
+      if (!response.data || !response.data.files) {
+        throw new Error('Invalid response format')
+      }
+
+      setProcessedFiles(response.data.files)
+      console.log('Set processed files:', response.data.files)
       
       toast({
         title: 'Success',
@@ -88,10 +96,15 @@ const BackgroundRemover = () => {
 
   const downloadFile = async (file: ProcessedFile) => {
     try {
+      console.log('Downloading file:', file)
+      console.log('Download URL:', `${API_URL}${file.url}`)
+      
       const response = await axios.get(`${API_URL}${file.url}`, {
         responseType: 'blob'
       })
-      const url = window.URL.createObjectURL(new Blob([response.data]))
+      
+      const blob = new Blob([response.data])
+      const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
       link.download = file.filename
@@ -99,6 +112,8 @@ const BackgroundRemover = () => {
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
+      
+      console.log('Download completed')
     } catch (error) {
       console.error('Download error:', error)
       toast({
@@ -110,6 +125,8 @@ const BackgroundRemover = () => {
       })
     }
   }
+
+  console.log('Current processedFiles:', processedFiles)
 
   return (
     <VStack spacing={6} align="stretch">

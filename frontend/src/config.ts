@@ -8,7 +8,7 @@ const getBaseUrl = () => {
     return `http://${hostname}:8010`;
   }
   
-  // In production with domain name
+  // In production with domain name, don't use any port
   return `${protocol}//${hostname}`;
 };
 
