@@ -483,17 +483,17 @@ async def download_video(
         if audio_only:
             ydl_opts = {
                 **base_opts,
-                'format': 'bestaudio',  # Only download audio stream
+                'format': 'bestaudio',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
-                    'preferredcodec': format,
-                    'preferredquality': '192',
-                    'nopostoverwrites': False,
+                    'preferredcodec': 'mp3',  # Always use mp3 for audio
+                    'preferredquality': '320',  # Use high quality
                 }],
-                # FFmpeg optimization options
                 'postprocessor_args': [
-                    '-threads', '3',  # Use multiple threads for processing
-                    '-preset', 'veryfast',  # Faster encoding
+                    '-threads', '3',
+                    '-b:a', '320k',  # Set bitrate
+                    '-ar', '44100',  # Set sample rate
+                    '-ac', '2',      # Set channels (stereo)
                 ],
                 # Skip unnecessary steps
                 'updatetime': False,
@@ -503,16 +503,23 @@ async def download_video(
                 'writesubtitles': False,
             }
         else:
-            # If format_id is provided, use it directly
-            format_spec = format_id if format_id else f'bestvideo[ext={format}]+bestaudio/best[ext={format}]/best'
+            # For video, always include audio and use specific format
+            if format_id:
+                format_spec = f'{format_id}+bestaudio/best'
+            else:
+                format_spec = f'bestvideo[ext={format}]+bestaudio[ext=m4a]/best[ext={format}]'
+            
             ydl_opts = {
                 **base_opts,
                 'format': format_spec,
-                'merge_output_format': format,
-                # FFmpeg optimization options for video
+                'merge_output_format': 'mp4',  # Always use mp4 for videos
                 'postprocessor_args': [
                     '-threads', '3',
-                    '-preset', 'veryfast',
+                    '-preset', 'medium',  # Better quality/size ratio
+                    '-movflags', '+faststart',  # Enable streaming
+                    '-c:a', 'aac',        # Use AAC audio codec
+                    '-b:a', '192k',       # Audio bitrate
+                    '-c:v', 'libx264',    # Video codec
                 ],
             }
             logger.info(f"Using format specification: {format_spec}")
