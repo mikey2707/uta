@@ -478,13 +478,20 @@ async def download_video(
             'concurrent_fragments': 3,
             'progress_hooks': [progress.progress_hook],
             'format_sort': ['res:1080', 'ext:mp4:m4a'],
-            'retries': 3,
-            'ignoreerrors': False,
+            'retries': 5,
+            'fragment_retries': 5,
+            'ignoreerrors': True,
             'no_color': True,
             'noprogress': True,
             'noplaylist': True,
-            'cookiefile': 'backend/cookies.txt',
-            'no_check_certificates': True
+            'cookiefile': '/app/backend/cookies/cookies.txt',
+            'no_check_certificates': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'config', 'js']
+                }
+            }
         }
         
         # Configure yt-dlp options based on whether audio_only is selected
