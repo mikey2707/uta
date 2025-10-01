@@ -1,0 +1,5 @@
+# Netscape HTTP Cookie File
+# This is a generated file!  Do not edit.
+
+.youtube.com	TRUE	/	FALSE	2597573600	CONSENT	YES+cb
+.youtube.com	TRUE	/	FALSE	2597573600	VISITOR_INFO1_LIVE	yes

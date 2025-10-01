@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend files
 COPY backend/ backend/
+RUN chmod 644 backend/cookies.txt
 
 # Create necessary directories
 RUN mkdir -p backend/uploads backend/outputs backend/downloads
