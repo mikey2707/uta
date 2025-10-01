@@ -23,12 +23,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and Node.js
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g serve \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
