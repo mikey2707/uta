@@ -20,6 +20,9 @@ backend/downloads/*
 !backend/outputs/.gitkeep
 !backend/downloads/.gitkeep
 
+# Secrets
+backend/cookies/cookies.txt
+
 # IDE
 .vscode/
 .idea/
