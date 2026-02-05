@@ -415,23 +415,31 @@ async def get_video_info(url: str = Form(...)):
                 
                 resolution_key = f"{height}_{fps}"
                 
-                # Only add if we haven't seen this resolution+fps combo
+                # Store potential formats; we want to keep the best bitrate/quality for each resolution
+                # For adaptive streams (video only), we can still use them as they'll be merged
+                all_formats.append({
+                    'format_id': f['format_id'],
+                    'resolution': resolution,
+                    'filesize_approx': filesize,
+                    'vcodec': f.get('vcodec', ''),
+                    'fps': fps,
+                    'height': height,
+                    'tbr': f.get('tbr', 0) or 0, # Total bitrate, useful for tie-breaking
+                })
+
+            # Sort all formats by height (desc), then fps (desc), then tbr (desc)
+            all_formats.sort(key=lambda x: (-x['height'], -x['fps'], -x['tbr']))
+            
+            # Filter duplicates, keeping only the best quality for each resolution/fps combo
+            for f in all_formats:
+                resolution_key = f"{f['height']}_{f['fps']}"
                 if resolution_key not in seen_resolutions:
                     seen_resolutions.add(resolution_key)
-                    all_formats.append({
-                        'format_id': f['format_id'],
-                        'resolution': resolution,
-                        'filesize_approx': filesize,
-                        'vcodec': f.get('vcodec', ''),
-                        'fps': fps,
-                        'height': height,  # Used for sorting
-                    })
-            
-            # Sort by height (resolution) and fps, then remove the height field
-            all_formats.sort(key=lambda x: (-x['height'], -x['fps']))
-            for f in all_formats:
-                del f['height']
-                formats.append(f)
+                    # Clean up internal keys
+                    out_fmt = f.copy()
+                    del out_fmt['height']
+                    del out_fmt['tbr']
+                    formats.append(out_fmt)
             
             # Sort formats by resolution (height) and fps
             formats.sort(key=lambda x: (
@@ -494,22 +502,21 @@ async def download_video(
             'extract_flat': False,
             'concurrent_fragments': 3,
             'progress_hooks': [progress.progress_hook],
-            'format_sort': ['res:1080', 'ext:mp4:m4a'],
             'retries': 5,
             'fragment_retries': 5,
             'ignoreerrors': True,
             'no_color': True,
             'noprogress': True,
             'noplaylist': True,
-            'cookiefile': '/app/backend/cookies/cookies.txt',
             'no_check_certificates': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': ['webpage', 'config', 'js']
-                }
-            }
         }
+
+        # Add cookie file only if it exists
+        # Use relative path to support both Docker and local development
+        base_dir = Path(__file__).resolve().parent
+        cookie_file = base_dir / 'cookies' / 'cookies.txt'
+        if cookie_file.exists():
+            base_opts['cookiefile'] = str(cookie_file)
         
         # Configure yt-dlp options based on whether audio_only is selected
         if audio_only:
@@ -561,6 +568,9 @@ async def download_video(
             logger.info("Starting download process...")
             info = ydl.extract_info(url, download=True)
             
+            if not info:
+                raise HTTPException(status_code=400, detail="Failed to extract video information or video unavailable")
+
             # Get the actual filename that was saved
             filename = ydl.prepare_filename(info)
             
