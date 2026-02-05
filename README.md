@@ -41,7 +41,7 @@ npm install
 npm run dev
 ```
 
-The frontend will be available at http://localhost:3000
+The frontend will be available at http://localhost:5173
 
 ### Optional Configuration
 
@@ -55,7 +55,7 @@ uvicorn main:app --reload
 
 ## Usage
 
-1. Open your browser and navigate to http://localhost:3000
+1. Open your browser and navigate to http://localhost:5173
 2. Choose the tool you want to use from the tabs
 3. Follow the interface instructions for each tool:
    - Background Removal: Drop an image and click "Remove Background"

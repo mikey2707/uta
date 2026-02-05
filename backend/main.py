@@ -34,6 +34,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3010",
         "http://localhost:3000",
+        "http://localhost:5173",
         "http://10.0.0.201:3010",
         "https://tools.mikey.host",
     ],

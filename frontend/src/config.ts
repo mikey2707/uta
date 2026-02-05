@@ -9,7 +9,7 @@ const getBaseUrl = () => {
   
   // If we're in development (localhost or IP address)
   if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-    return `http://${hostname}:8000`;
+    return `http://${hostname}:8010`;
   }
   
   // In production with domain name, don't use any port
