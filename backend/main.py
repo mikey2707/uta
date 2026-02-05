@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 from rembg import remove
 
+STIRLING_PDF_URL = os.getenv("STIRLING_PDF_URL")
+
+def get_stirling_headers():
+    return {}
+
 app = FastAPI(title="Unified Tools API")
 
 # Configure CORS
@@ -28,6 +33,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3010",
+        "http://localhost:3000",
+        "http://localhost:5173",
         "http://10.0.0.201:3010",
         "https://tools.mikey.host",
     ],
@@ -38,8 +45,14 @@ app.add_middleware(
 
 # Configure logging
 
+@app.get("/")
+async def health_check():
+    return {"status": "ok", "service": "Unified Tools API"}
+
 @app.post("/api/pdf/merge")
 async def merge_pdfs(files: List[UploadFile] = File(...)):
+    if not STIRLING_PDF_URL:
+        raise HTTPException(status_code=501, detail="Stirling-PDF service not configured")
     try:
         # Save uploaded files
         saved_files = []
@@ -86,6 +99,8 @@ async def split_pdf(
     split_type: str = Form(...),  # 'ranges', 'pages', or 'interval'
     split_value: str = Form(...)  # e.g., "1-3,4-6" or "2" (every 2 pages)
 ):
+    if not STIRLING_PDF_URL:
+        raise HTTPException(status_code=501, detail="Stirling-PDF service not configured")
     try:
         # Save uploaded file
         file_path = UPLOAD_DIR / file.filename
@@ -140,6 +155,8 @@ async def add_watermark(
     height_spacer: int = Form(50),
     watermark_image: UploadFile = File(None)
 ):
+    if not STIRLING_PDF_URL:
+        raise HTTPException(status_code=501, detail="Stirling-PDF service not configured")
     try:
         # Save uploaded PDF
         pdf_path = UPLOAD_DIR / file.filename

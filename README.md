@@ -43,6 +43,16 @@ npm run dev
 
 The frontend will be available at http://localhost:5173
 
+### Optional Configuration
+
+To enable PDF tools, you need a running instance of [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF).
+Configure the backend by setting the `STIRLING_PDF_URL` environment variable:
+
+```bash
+export STIRLING_PDF_URL=http://localhost:8080
+uvicorn main:app --reload
+```
+
 ## Usage
 
 1. Open your browser and navigate to http://localhost:5173

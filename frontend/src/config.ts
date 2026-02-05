@@ -1,5 +1,9 @@
 // Use the current protocol (http/https) and hostname for dynamic configuration
 const getBaseUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+
   const protocol = window.location.protocol;
   const hostname = window.location.hostname;
   
