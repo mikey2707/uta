@@ -1,11 +1,15 @@
 // Use the current protocol (http/https) and hostname for dynamic configuration
 const getBaseUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+
   const protocol = window.location.protocol;
   const hostname = window.location.hostname;
   
   // If we're in development (localhost or IP address)
   if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-    return `http://${hostname}:8010`;
+    return `http://${hostname}:8000`;
   }
   
   // In production with domain name, don't use any port
