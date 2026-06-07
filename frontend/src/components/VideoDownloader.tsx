@@ -57,6 +57,7 @@ const VideoDownloader = () => {
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
   const [isAudioOnly, setIsAudioOnly] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null)
+  const [downloadedFiles, setDownloadedFiles] = useState<Record<string, string>>({})
   const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null)
   const toast = useToast()
   const boxBg = useColorModeValue('white', 'gray.800')
@@ -128,10 +129,6 @@ const VideoDownloader = () => {
       } catch (error) {
         console.error('Error polling progress:', error)
         // Don't stop polling on network errors, they might be temporary
-        if (pollInterval === null) {
-          setIsLoading(false)
-          setDownloadProgress(null)
-        }
       }
     }, 1000)  // Reduced polling frequency to 1 second
 
@@ -142,6 +139,7 @@ const VideoDownloader = () => {
     setUrl(newUrl)
     setVideoInfo(null)
     setSelectedFormat('')
+    setDownloadedFiles({})
   }
 
   const handleFetchInfo = async () => {
@@ -212,7 +210,8 @@ const VideoDownloader = () => {
         throw new Error('Invalid response data')
       }
       
-      setVideoInfo(prev => prev ? { ...prev, download_path: data.download_path } : null)
+      const formatKey = isAudioOnly ? 'audio_only' : selectedFormat
+      setDownloadedFiles(prev => ({ ...prev, [formatKey]: data.download_path }))
       
       toast({
         title: 'Success',
@@ -230,26 +229,27 @@ const VideoDownloader = () => {
         duration: 3000,
         isClosable: true,
       })
-      
-      if (pollInterval) {
-        clearInterval(pollInterval)
-        setPollInterval(null)
-      }
+    } finally {
+      setPollInterval(prev => {
+        if (prev) clearInterval(prev)
+        return null
+      })
       setIsLoading(false)
+      setDownloadProgress(null)
     }
   }
 
-  const downloadFile = async () => {
-    if (!videoInfo?.download_path) return
+  const downloadFile = async (path: string) => {
+    if (!path) return
 
     try {
-      const response = await axios.get(`${API_URL}/api/download/${encodeURIComponent(videoInfo.download_path)}`, {
+      const response = await axios.get(`${API_URL}/api/download/${encodeURIComponent(path)}`, {
         responseType: 'blob'
       })
       const url = window.URL.createObjectURL(new Blob([response.data]))
       const link = document.createElement('a')
       link.href = url
-      link.download = videoInfo.download_path
+      link.download = path
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -294,8 +294,8 @@ const VideoDownloader = () => {
 
       {isChecking && (
         <Box textAlign="center" py={4}>
-          <Text>Checking video information...</Text>
-          <Progress size="xs" isIndeterminate />
+          <Text fontSize="sm" color="gray.500" mb={2}>Checking video information...</Text>
+          <Progress size="xs" isIndeterminate borderRadius="full" colorScheme="gray" />
         </Box>
       )}
 
@@ -326,25 +326,35 @@ const VideoDownloader = () => {
         />
       </FormControl>
 
-      <Button
-        colorScheme="blue"
-        onClick={handleDownload}
-        isLoading={isLoading}
-        isDisabled={!url || isChecking}
-      >
-        {isAudioOnly ? 'Download Audio' : 'Download Video'}
-      </Button>
+      {downloadedFiles[isAudioOnly ? 'audio_only' : selectedFormat] ? (
+        <Button
+          colorScheme="green"
+          onClick={() => downloadFile(downloadedFiles[isAudioOnly ? 'audio_only' : selectedFormat])}
+          isDisabled={!url || isChecking}
+        >
+          Save {isAudioOnly ? 'Audio' : 'Video'} to Computer
+        </Button>
+      ) : (
+        <Button
+          colorScheme="blue"
+          onClick={handleDownload}
+          isLoading={isLoading}
+          isDisabled={!url || isChecking}
+        >
+          {isAudioOnly ? 'Prepare Audio Download' : 'Prepare Video Download'}
+        </Button>
+      )}
 
       {(isLoading || downloadProgress) && (
         <Box borderWidth={1} borderRadius="lg" p={4} bg={boxBg}>
           <VStack spacing={4}>
             <Progress
               value={downloadProgress?.progress || 0}
-              size="lg"
+              size="sm"
               width="100%"
               colorScheme="blue"
-              hasStripe
-              isAnimated
+              borderRadius="full"
+              bg={useColorModeValue('gray.100', 'gray.700')}
             />
             <StatGroup width="100%">
               <Stat>
@@ -382,14 +392,6 @@ const VideoDownloader = () => {
             <Text>Duration: {formatDuration(videoInfo.duration)}</Text>
             {!isAudioOnly && videoInfo.thumbnail && (
               <Image src={videoInfo.thumbnail} maxH="200px" objectFit="contain" />
-            )}
-            {videoInfo.download_path && (
-              <Button
-                colorScheme="green"
-                onClick={downloadFile}
-              >
-                Download {isAudioOnly ? 'Audio' : 'Video'} File
-              </Button>
             )}
           </VStack>
         </Box>

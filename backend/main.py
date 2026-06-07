@@ -52,7 +52,7 @@ async def health_check():
     return {"status": "ok", "service": "Unified Tools API"}
 
 @app.post("/api/pdf/merge")
-async def merge_pdfs(files: List[UploadFile] = File(...)):
+def merge_pdfs(files: List[UploadFile] = File(...)):
     if not STIRLING_PDF_URL:
         raise HTTPException(status_code=501, detail="Stirling-PDF service not configured")
     try:
@@ -96,7 +96,7 @@ async def merge_pdfs(files: List[UploadFile] = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/pdf/split")
-async def split_pdf(
+def split_pdf(
     file: UploadFile = File(...),
     split_type: str = Form(...),  # 'ranges', 'pages', or 'interval'
     split_value: str = Form(...)  # e.g., "1-3,4-6" or "2" (every 2 pages)
@@ -146,7 +146,7 @@ async def split_pdf(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/pdf/add-watermark")
-async def add_watermark(
+def add_watermark(
     file: UploadFile = File(...),
     watermark_type: str = Form(...),  # 'text' or 'image'
     watermark_text: str = Form(None),
@@ -487,7 +487,7 @@ async def get_download_progress():
         return download_progress
 
 @app.post("/api/get-video-info")
-async def get_video_info(url: str = Form(...)):
+def get_video_info(url: str = Form(...)):
     try:
         # Configure yt-dlp options for format extraction
         # Don't restrict to Android player to get all available formats
@@ -560,7 +560,7 @@ async def get_video_info(url: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/download-video")
-async def download_video(
+def download_video(
     url: str = Form(...),
     format_id: str = Form(None),
     audio_only: bool = Form(False),

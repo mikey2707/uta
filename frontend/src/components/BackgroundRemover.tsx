@@ -217,13 +217,20 @@ const BackgroundRemover = () => {
       )}
 
       {isLoading && (
-        <Progress
-          value={progress}
-          size="xs"
-          colorScheme="blue"
-          hasStripe
-          isAnimated
-        />
+        <Box borderWidth={1} borderRadius="lg" p={4} bg={boxBg}>
+          <VStack spacing={2}>
+            <Text fontWeight="medium">Processing Images...</Text>
+            <Progress
+              value={progress}
+              size="sm"
+              width="100%"
+              colorScheme="blue"
+              borderRadius="full"
+              bg={useColorModeValue('gray.100', 'gray.700')}
+            />
+            <Text fontSize="sm">{progress}% Complete</Text>
+          </VStack>
+        </Box>
       )}
 
       {processedFiles && processedFiles.length > 0 && (
