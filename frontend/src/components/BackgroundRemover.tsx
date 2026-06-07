@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import {
   Button,
   VStack,
@@ -20,6 +20,29 @@ import { API_URL } from '../config'
 interface ProcessedFile {
   filename: string
   url: string
+}
+
+const FilePreview = ({ file }: { file: File }) => {
+  const [url, setUrl] = useState<string>('')
+  
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file)
+    setUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [file])
+
+  return (
+    <Image 
+      src={url} 
+      alt={file.name} 
+      objectFit="cover" 
+      h="120px" 
+      w="full" 
+      borderRadius="md" 
+      mb={2}
+      bg="gray.100"
+    />
+  )
 }
 
 const BackgroundRemover = () => {
@@ -60,16 +83,20 @@ const BackgroundRemover = () => {
         formData.append('files', file)
       })
 
-      console.log('Making API request to:', `${API_URL}/api/remove-background`)
-      const response = await axios.post(`${API_URL}/api/remove-background`, formData)
-      console.log('API Response:', response.data)
+      const response = await axios.post(`${API_URL}/api/remove-background`, formData, {
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            setProgress(percentCompleted)
+          }
+        }
+      })
       
       if (!response.data || !response.data.files) {
         throw new Error('Invalid response format')
       }
 
       setProcessedFiles(response.data.files)
-      console.log('Set processed files:', response.data.files)
       
       toast({
         title: 'Success',
@@ -96,9 +123,6 @@ const BackgroundRemover = () => {
 
   const downloadFile = async (file: ProcessedFile) => {
     try {
-      console.log('Downloading file:', file)
-      console.log('Download URL:', `${API_URL}${file.url}`)
-      
       const response = await axios.get(`${API_URL}${file.url}`, {
         responseType: 'blob'
       })
@@ -112,8 +136,6 @@ const BackgroundRemover = () => {
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
-      
-      console.log('Download completed')
     } catch (error) {
       console.error('Download error:', error)
       toast({
@@ -125,8 +147,6 @@ const BackgroundRemover = () => {
       })
     }
   }
-
-  console.log('Current processedFiles:', processedFiles)
 
   return (
     <VStack spacing={6} align="stretch">
@@ -175,8 +195,12 @@ const BackgroundRemover = () => {
                   top={1}
                   right={1}
                   onClick={() => removeFile(index)}
+                  zIndex={1}
+                  colorScheme="red"
+                  variant="solid"
                 />
-                <Text noOfLines={1} pr={8}>{file.name}</Text>
+                <FilePreview file={file} />
+                <Text noOfLines={1} fontSize="sm">{file.name}</Text>
               </Box>
             ))}
           </SimpleGrid>
@@ -218,8 +242,15 @@ const BackgroundRemover = () => {
                   <Image
                     src={`${API_URL}${file.url}`}
                     alt={file.filename}
-                    maxH="200px"
+                    h="200px"
+                    w="full"
                     objectFit="contain"
+                    borderRadius="md"
+                    sx={{
+                      backgroundImage: 'repeating-linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc), repeating-linear-gradient(45deg, #ccc 25%, #fff 25%, #fff 75%, #ccc 75%, #ccc)',
+                      backgroundPosition: '0 0, 10px 10px',
+                      backgroundSize: '20px 20px',
+                    }}
                   />
                   <HStack width="full" justify="space-between">
                     <Text noOfLines={1} flex={1}>{file.filename}</Text>

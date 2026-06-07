@@ -7,6 +7,14 @@ export default defineConfig({
   server: {
     host: true,
     port: 3000,
+    proxy: {
+      // Forward all /api requests to the backend server
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      }
+    }
   },
   build: {
     outDir: 'dist',

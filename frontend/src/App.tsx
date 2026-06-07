@@ -5,15 +5,16 @@ import {
   Heading,
   Tab,
   TabList,
-  TabPanel,
-  TabPanels,
   Tabs,
   Box,
   useColorModeValue,
   Text,
   extendTheme,
   ThemeConfig,
+  useColorMode,
 } from '@chakra-ui/react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useState } from 'react'
 import BackgroundRemover from './components/BackgroundRemover'
 import ImageConverter from './components/ImageConverter'
 import VideoDownloader from './components/VideoDownloader'
@@ -26,139 +27,122 @@ const config: ThemeConfig = {
   useSystemColorMode: true,
 }
 
-// Extend the theme to customize the look
+// Extend the theme for fonts or other subtle things, but remove rigid component overrides
 const theme = extendTheme({
   config,
   styles: {
-    global: (props) => ({
-      'html, body, #root': {
-        backgroundColor: props.colorMode === 'dark' ? 'gray.900' : 'white',
-        minHeight: '100vh',
-      },
-    }),
-  },
-  components: {
-    Box: {
-      baseStyle: (props) => ({
-        bg: props.colorMode === 'dark' ? 'gray.900' : 'white',
-      }),
-    },
-    Container: {
-      baseStyle: (props) => ({
-        bg: props.colorMode === 'dark' ? 'gray.900' : 'white',
-      }),
-    },
-    Tabs: {
-      variants: {
-        enclosed: (props) => ({
-          root: {
-            borderColor: props.colorMode === 'dark' ? 'gray.700' : 'gray.200',
-          },
-          tab: {
-            bg: props.colorMode === 'dark' ? 'gray.700' : 'gray.100',
-            color: props.colorMode === 'dark' ? 'gray.200' : 'gray.600',
-            borderColor: props.colorMode === 'dark' ? 'gray.700' : 'gray.200',
-            _selected: {
-              bg: props.colorMode === 'dark' ? 'gray.800' : 'white',
-              color: props.colorMode === 'dark' ? 'white' : 'gray.800',
-              borderColor: props.colorMode === 'dark' ? 'gray.700' : 'gray.200',
-            },
-            _hover: {
-              bg: props.colorMode === 'dark' ? 'gray.600' : 'gray.50',
-            },
-          },
-          tablist: {
-            borderColor: props.colorMode === 'dark' ? 'gray.700' : 'gray.200',
-          },
-          tabpanel: {
-            bg: props.colorMode === 'dark' ? 'gray.800' : 'white',
-            borderColor: props.colorMode === 'dark' ? 'gray.700' : 'gray.200',
-          },
-        }),
+    global: {
+      'html, body': {
+        // We let index.css mesh classes handle the background now
+        background: 'transparent',
       },
     },
   },
 })
 
-function App() {
-  const bgColor = useColorModeValue('white', 'gray.900')
-  const cardBg = useColorModeValue('gray.50', 'gray.800')
-  const borderColor = useColorModeValue('gray.200', 'gray.700')
-  const gradientStart = useColorModeValue('blue.400', 'blue.200')
-  const gradientEnd = useColorModeValue('purple.500', 'purple.400')
+// Create a motion component for the tab panels
+const MotionBox = motion(Box)
+
+function AppContent() {
+  const { colorMode } = useColorMode()
+  const [tabIndex, setTabIndex] = useState(0)
+  
+  // Glassmorphism variables
+  const glassBg = useColorModeValue('rgba(255, 255, 255, 0.75)', 'rgba(15, 23, 42, 0.75)')
+  const glassBorder = useColorModeValue('rgba(255, 255, 255, 0.5)', 'rgba(255, 255, 255, 0.08)')
+  const textShadowColor = useColorModeValue('rgba(255,255,255,0.8)', 'rgba(0,0,0,0.8)')
+  
+  const gradientStart = useColorModeValue('blue.500', 'blue.300')
+  const gradientEnd = useColorModeValue('purple.500', 'purple.300')
 
   return (
-    <ChakraProvider theme={theme}>
-      <Box 
-        as="div" 
-        className="app-wrapper"
-        minHeight="100vh"
-        bg={bgColor}
+    <Box 
+      as="div" 
+      className={`app-wrapper ${colorMode === 'dark' ? 'mesh-bg-dark' : 'mesh-bg-light'}`}
+    >
+      <ColorModeToggle />
+      <Container 
+        maxW="container.xl" 
+        py={12}
+        position="relative"
       >
-        <ColorModeToggle />
-        <Container 
-          maxW="container.xl" 
-          py={8}
-          bg={bgColor}
-        >
-          <VStack spacing={8} align="stretch">
-            <VStack spacing={2}>
-              <Heading 
-                size="2xl" 
-                bgGradient={`linear(to-r, ${gradientStart}, ${gradientEnd})`}
-                bgClip="text"
-              >
-                Unified Tools
-              </Heading>
-              <Text 
-                color={useColorModeValue('gray.600', 'gray.400')} 
-                fontSize="lg"
-              >
-                All-in-one media processing toolkit
-              </Text>
-            </VStack>
-            
-            <Box
-              bg={cardBg}
-              borderRadius="xl"
-              borderWidth="1px"
-              borderColor={borderColor}
-              overflow="hidden"
-              p={6}
-              className="main-card"
+        <VStack spacing={10} align="stretch">
+          <VStack spacing={3} textAlign="center">
+            <Heading 
+              size="3xl" 
+              fontWeight="extrabold"
+              bgGradient={`linear(to-r, ${gradientStart}, ${gradientEnd})`}
+              bgClip="text"
+              letterSpacing="tight"
+              style={{ filter: `drop-shadow(0px 2px 10px ${textShadowColor})` }}
             >
-              <Tabs 
-                isFitted 
-                variant="enclosed" 
-                colorScheme="blue"
-                isLazy
-              >
-                <TabList mb="1em">
-                  <Tab fontWeight="medium" py={4}>Background Remover</Tab>
-                  <Tab fontWeight="medium" py={4}>Image Converter</Tab>
-                  <Tab fontWeight="medium" py={4}>Video Downloader</Tab>
-                  <Tab fontWeight="medium" py={4}>PDF Tools</Tab>
-                </TabList>
-
-                <TabPanels>
-                  <TabPanel px={0}>
-                    <BackgroundRemover />
-                  </TabPanel>
-                  <TabPanel px={0}>
-                    <ImageConverter />
-                  </TabPanel>
-                  <TabPanel px={0}>
-                    <VideoDownloader />
-                  </TabPanel>
-                  <TabPanel px={0}>
-                    <PDFTools />
-                  </TabPanel>
-                </TabPanels>
-              </Tabs>
-            </Box>
+              Unified Tools
+            </Heading>
+            <Text 
+              color={useColorModeValue('gray.700', 'gray.300')} 
+              fontSize="xl"
+              fontWeight="medium"
+              style={{ textShadow: `0 2px 10px ${textShadowColor}` }}
+            >
+              Your all-in-one media processing toolkit
+            </Text>
           </VStack>
-        </Container>
-      </Box>
+          
+          <Box
+            className="main-card"
+            bg={glassBg}
+            backdropFilter="blur(24px)"
+            borderRadius="3xl"
+            borderWidth="1px"
+            borderColor={glassBorder}
+            boxShadow={colorMode === 'dark' ? '0 25px 50px -12px rgba(0, 0, 0, 0.7)' : '0 25px 50px -12px rgba(0, 0, 0, 0.15)'}
+            overflow="hidden"
+            p={{ base: 4, md: 8 }}
+          >
+            <Tabs 
+              index={tabIndex}
+              onChange={(index) => setTabIndex(index)}
+              isFitted={false}
+              align="center"
+              variant="soft-rounded" 
+              colorScheme="blue"
+              isLazy
+            >
+              <TabList mb={8} gap={2} flexWrap="wrap" justifyContent="center">
+                <Tab fontWeight="bold" px={6} py={3} borderRadius="full" transition="all 0.2s">Background Remover</Tab>
+                <Tab fontWeight="bold" px={6} py={3} borderRadius="full" transition="all 0.2s">Image Converter</Tab>
+                <Tab fontWeight="bold" px={6} py={3} borderRadius="full" transition="all 0.2s">Video Downloader</Tab>
+                <Tab fontWeight="bold" px={6} py={3} borderRadius="full" transition="all 0.2s">PDF Tools</Tab>
+              </TabList>
+
+              <Box position="relative" minH="500px">
+                <AnimatePresence mode="wait">
+                  <MotionBox
+                    key={tabIndex}
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -15 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                  >
+                    {tabIndex === 0 && <BackgroundRemover />}
+                    {tabIndex === 1 && <ImageConverter />}
+                    {tabIndex === 2 && <VideoDownloader />}
+                    {tabIndex === 3 && <PDFTools />}
+                  </MotionBox>
+                </AnimatePresence>
+              </Box>
+            </Tabs>
+          </Box>
+        </VStack>
+      </Container>
+    </Box>
+  )
+}
+
+function App() {
+  return (
+    <ChakraProvider theme={theme}>
+      <AppContent />
     </ChakraProvider>
   )
 }

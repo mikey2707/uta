@@ -57,8 +57,9 @@ const VideoDownloader = () => {
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
   const [isAudioOnly, setIsAudioOnly] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null)
-  const [pollInterval, setPollInterval] = useState<NodeJS.Timeout | null>(null)
+  const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null)
   const toast = useToast()
+  const boxBg = useColorModeValue('white', 'gray.800')
 
   useEffect(() => {
     return () => {
@@ -137,36 +138,53 @@ const VideoDownloader = () => {
     setPollInterval(interval)
   }
 
-  const handleUrlChange = async (newUrl: string) => {
+  const handleUrlChange = (newUrl: string) => {
     setUrl(newUrl)
-    if (newUrl.includes('youtube.com/') || newUrl.includes('youtu.be/')) {
-      setIsChecking(true)
-      try {
-        const formData = new FormData()
-        formData.append('url', newUrl)
-        
-        const response = await axios.post(`${API_URL}/api/get-video-info`, formData)
-        const data = response.data
-        if (!data || !data.formats) {
-          throw new Error('Invalid response data')
-        }
-        setVideoInfo(data)
-        if (data.formats.length > 0) {
-          setSelectedFormat(data.formats[0].format_id)
-        }
-      } catch (error) {
-        console.error('Video info error:', error)
-        toast({
-          title: 'Error',
-          description: 'Failed to fetch video information',
-          status: 'error',
-          duration: 3000,
-          isClosable: true,
-        })
-        setVideoInfo(null)
-      } finally {
-        setIsChecking(false)
+    setVideoInfo(null)
+    setSelectedFormat('')
+  }
+
+  const handleFetchInfo = async () => {
+    if (!url) return
+    setIsChecking(true)
+    setVideoInfo(null)
+    setSelectedFormat('')
+    try {
+      const formData = new FormData()
+      formData.append('url', url)
+      
+      const response = await axios.post(`${API_URL}/api/get-video-info`, formData)
+      const data = response.data
+      if (!data || !data.formats) {
+        throw new Error('Invalid response data')
       }
+      setVideoInfo(data)
+      if (data.formats.length > 0) {
+        setSelectedFormat(data.formats[0].format_id)
+      }
+      toast({
+        title: 'Video Info Loaded',
+        description: `Successfully loaded info for "${data.title}"`,
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      })
+    } catch (error: unknown) {
+      console.error('Video info error:', error)
+      let errorMsg = 'Failed to fetch video information'
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        errorMsg = error.response.data.detail
+      }
+      toast({
+        title: 'Error',
+        description: errorMsg,
+        status: 'error',
+        duration: 4000,
+        isClosable: true,
+      })
+      setVideoInfo(null)
+    } finally {
+      setIsChecking(false)
     }
   }
 
@@ -252,11 +270,26 @@ const VideoDownloader = () => {
     <VStack spacing={4} align="stretch">
       <FormControl>
         <FormLabel>Video URL</FormLabel>
-        <Input
-          value={url}
-          onChange={(e) => handleUrlChange(e.target.value)}
-          placeholder="Enter YouTube URL"
-        />
+        <HStack>
+          <Input
+            value={url}
+            onChange={(e) => handleUrlChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleFetchInfo()
+              }
+            }}
+            placeholder="Enter video URL (e.g. YouTube, Vimeo, TikTok)"
+          />
+          <Button
+            colorScheme="teal"
+            onClick={handleFetchInfo}
+            isLoading={isChecking}
+            isDisabled={!url}
+          >
+            Analyze
+          </Button>
+        </HStack>
       </FormControl>
 
       {isChecking && (
@@ -303,7 +336,7 @@ const VideoDownloader = () => {
       </Button>
 
       {(isLoading || downloadProgress) && (
-        <Box borderWidth={1} borderRadius="lg" p={4} bg={useColorModeValue('white', 'gray.800')}>
+        <Box borderWidth={1} borderRadius="lg" p={4} bg={boxBg}>
           <VStack spacing={4}>
             <Progress
               value={downloadProgress?.progress || 0}

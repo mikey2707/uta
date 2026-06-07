@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   Button,
   FormControl,
@@ -15,6 +15,12 @@ import {
   IconButton,
   HStack,
   useColorModeValue,
+  Slider,
+  SliderTrack,
+  SliderFilledTrack,
+  SliderThumb,
+  Checkbox,
+  Image,
 } from '@chakra-ui/react'
 import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
@@ -26,11 +32,39 @@ interface ProcessedFile {
   url: string
 }
 
+const FilePreview = ({ file }: { file: File }) => {
+  const [url, setUrl] = useState<string>('')
+  
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file)
+    setUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [file])
+
+  return (
+    <Image 
+      src={url} 
+      alt={file.name} 
+      objectFit="cover" 
+      h="120px" 
+      w="full" 
+      borderRadius="md" 
+      mb={2}
+      bg="gray.100"
+    />
+  )
+}
+
 const ImageConverter = () => {
   const [files, setFiles] = useState<File[]>([])
   const [format, setFormat] = useState('png')
   const [width, setWidth] = useState<number | null>(null)
   const [height, setHeight] = useState<number | null>(null)
+  const [quality, setQuality] = useState(90)
+  const [maintainRatio, setMaintainRatio] = useState(true)
+  const [stripMetadata, setStripMetadata] = useState(true)
+  const [filterType, setFilterType] = useState('none')
+  const [rotation, setRotation] = useState('0')
   const [isLoading, setIsLoading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([])
@@ -48,7 +82,7 @@ const ImageConverter = () => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+      'image/*': ['.png', '.jpg', '.jpeg', '.ico', '.webp']
     },
   })
 
@@ -69,8 +103,20 @@ const ImageConverter = () => {
       formData.append('format', format)
       if (width) formData.append('width', width.toString())
       if (height) formData.append('height', height.toString())
+      formData.append('quality', quality.toString())
+      formData.append('maintain_aspect_ratio', maintainRatio.toString())
+      formData.append('strip_metadata', stripMetadata.toString())
+      formData.append('filter_type', filterType)
+      formData.append('rotation', rotation)
 
-      const response = await axios.post(`${API_URL}/api/convert-image`, formData)
+      const response = await axios.post(`${API_URL}/api/convert-image`, formData, {
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            setProgress(percentCompleted)
+          }
+        }
+      })
       setProcessedFiles(response.data.files || [])
       
       toast({
@@ -141,7 +187,7 @@ const ImageConverter = () => {
               : "Drag 'n' drop images here, or click to select"}
           </Text>
           <Text fontSize="sm" color="gray.500">
-            Supports PNG, JPG, JPEG, GIF, WebP
+            Supports PNG, JPG, JPEG, ICO, WebP
           </Text>
         </VStack>
       </Box>
@@ -167,8 +213,12 @@ const ImageConverter = () => {
                   top={1}
                   right={1}
                   onClick={() => removeFile(index)}
+                  zIndex={1}
+                  colorScheme="red"
+                  variant="solid"
                 />
-                <Text noOfLines={1} pr={8}>{file.name}</Text>
+                <FilePreview file={file} />
+                <Text noOfLines={1} fontSize="sm">{file.name}</Text>
               </Box>
             ))}
           </SimpleGrid>
@@ -184,9 +234,21 @@ const ImageConverter = () => {
                 <option value="png">PNG</option>
                 <option value="jpg">JPEG</option>
                 <option value="webp">WebP</option>
-                <option value="gif">GIF</option>
+                <option value="ico">ICO</option>
               </Select>
             </FormControl>
+
+            {['jpg', 'webp'].includes(format) && (
+              <FormControl>
+                <FormLabel>Quality ({quality}%)</FormLabel>
+                <Slider value={quality} onChange={(v) => setQuality(v)} min={1} max={100}>
+                  <SliderTrack bg={borderColor}>
+                    <SliderFilledTrack bg="blue.500" />
+                  </SliderTrack>
+                  <SliderThumb boxSize={6} />
+                </Slider>
+              </FormControl>
+            )}
 
             <HStack spacing={4} width="full">
               <FormControl>
@@ -209,6 +271,45 @@ const ImageConverter = () => {
                 </NumberInput>
               </FormControl>
             </HStack>
+
+            <Checkbox 
+              isChecked={maintainRatio} 
+              onChange={(e) => setMaintainRatio(e.target.checked)}
+              colorScheme="blue"
+              alignSelf="flex-start"
+            >
+              Maintain Aspect Ratio
+            </Checkbox>
+
+            <HStack spacing={4} width="full">
+              <FormControl>
+                <FormLabel>Filter</FormLabel>
+                <Select value={filterType} onChange={(e) => setFilterType(e.target.value)} bg={boxBg}>
+                  <option value="none">None</option>
+                  <option value="grayscale">Grayscale</option>
+                  <option value="blur">Blur</option>
+                </Select>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Rotation</FormLabel>
+                <Select value={rotation} onChange={(e) => setRotation(e.target.value)} bg={boxBg}>
+                  <option value="0">0°</option>
+                  <option value="90">90°</option>
+                  <option value="180">180°</option>
+                  <option value="270">270°</option>
+                </Select>
+              </FormControl>
+            </HStack>
+
+            <Checkbox 
+              isChecked={stripMetadata} 
+              onChange={(e) => setStripMetadata(e.target.checked)}
+              colorScheme="blue"
+              alignSelf="flex-start"
+            >
+              Strip Metadata (Privacy)
+            </Checkbox>
 
             <Button
               colorScheme="blue"
@@ -245,8 +346,22 @@ const ImageConverter = () => {
                 bg={boxBg}
               >
                 <VStack spacing={4}>
+                  <Image 
+                    src={`${API_URL}${file.url}`} 
+                    alt={file.filename} 
+                    objectFit="cover" 
+                    h="200px" 
+                    w="full" 
+                    borderRadius="md" 
+                    bg="gray.100"
+                  />
                   <HStack width="full" justify="space-between">
-                    <Text noOfLines={1} flex={1}>{file.filename}</Text>
+                    <VStack align="start" spacing={0} flex={1} overflow="hidden">
+                      <Text noOfLines={1} width="full">{file.filename}</Text>
+                      <Text fontSize="sm" color="gray.500">
+                        Converted to: {format.toUpperCase()}
+                      </Text>
+                    </VStack>
                     <IconButton
                       aria-label="Download"
                       icon={<DownloadIcon />}
@@ -254,9 +369,6 @@ const ImageConverter = () => {
                       colorScheme="green"
                     />
                   </HStack>
-                  <Text fontSize="sm" color="gray.500">
-                    Converted to: {format.toUpperCase()}
-                  </Text>
                 </VStack>
               </Box>
             ))}

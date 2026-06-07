@@ -1,42 +1,47 @@
-import React, { useEffect } from 'react'
-import { VStack, Text, Button, useColorModeValue } from '@chakra-ui/react'
+import {
+  VStack,
+  Text,
+  Box,
+  Button,
+  useColorModeValue,
+  Heading,
+  Icon
+} from '@chakra-ui/react'
 import { ExternalLinkIcon } from '@chakra-ui/icons'
+import { FaFilePdf } from 'react-icons/fa'
 
 const PDFTools = () => {
-  const handleRedirect = () => {
-    window.open('https://pdf.mikey.host', '_blank')
-  }
-
-  const bgColor = useColorModeValue('gray.50', 'gray.700')
-  const borderColor = useColorModeValue('gray.200', 'gray.600')
+  const bgColor = useColorModeValue('white', 'gray.800')
+  const borderColor = useColorModeValue('gray.200', 'gray.700')
 
   return (
-    <VStack
-      spacing={6}
-      p={8}
-      borderWidth={1}
-      borderRadius="lg"
-      borderColor={borderColor}
-      bg={bgColor}
-      align="center"
-      justify="center"
-      minH="300px"
-    >
-      <Text fontSize="xl" fontWeight="medium" textAlign="center">
-        PDF Tools are available at our dedicated website
-      </Text>
-      <Button
-        rightIcon={<ExternalLinkIcon />}
-        colorScheme="blue"
-        size="lg"
-        onClick={handleRedirect}
-      >
-        Open PDF Tools
-      </Button>
-      <Text color="gray.500" fontSize="sm" textAlign="center">
-        You will be redirected to pdf.mikey.host
-      </Text>
-    </VStack>
+    <Box p={10} borderWidth={1} borderRadius="2xl" bg={bgColor} borderColor={borderColor} textAlign="center" boxShadow="sm">
+      <VStack spacing={6}>
+        <Icon as={FaFilePdf} w={20} h={20} color="red.500" />
+        <VStack spacing={3}>
+          <Heading size="lg">Advanced PDF Suite</Heading>
+          <Text color="gray.500" maxW="lg" fontSize="lg">
+            We've migrated all PDF tools to our dedicated, feature-rich PDF portal. You can now split, merge, convert, compress, and do much more over at pdf.mikey.host!
+          </Text>
+        </VStack>
+        <Button
+          as="a"
+          href="https://pdf.mikey.host"
+          target="_blank"
+          rel="noopener noreferrer"
+          colorScheme="red"
+          size="lg"
+          rightIcon={<ExternalLinkIcon />}
+          mt={4}
+          px={8}
+          py={6}
+          fontWeight="bold"
+          borderRadius="full"
+        >
+          Open PDF Tools
+        </Button>
+      </VStack>
+    </Box>
   )
 }
 

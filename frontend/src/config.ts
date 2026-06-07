@@ -1,19 +1,4 @@
-// Use the current protocol (http/https) and hostname for dynamic configuration
-const getBaseUrl = () => {
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
-  }
-
-  const protocol = window.location.protocol;
-  const hostname = window.location.hostname;
-  
-  // If we're in development (localhost or IP address)
-  if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-    return `http://${hostname}:8010`;
-  }
-  
-  // In production with domain name, don't use any port
-  return `${protocol}//${hostname}`;
-};
-
-export const API_URL = getBaseUrl();
+// API URL configuration
+// In development: Vite proxy forwards /api/* to backend
+// In production: Use relative paths (same origin)
+export const API_URL = '';

@@ -1,19 +1,19 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 import uvicorn
 import os
 from pathlib import Path
 from typing import Optional, List
+import asyncio
+import time
 import shutil
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 import yt_dlp
-import sys
 import logging
 import traceback
 from threading import Lock
-import requests
-from urllib.parse import urljoin
+from starlette.concurrency import run_in_threadpool
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +27,7 @@ def get_stirling_headers():
     return {}
 
 app = FastAPI(title="Unified Tools API")
+
 
 # Configure CORS
 app.add_middleware(
@@ -44,6 +45,7 @@ app.add_middleware(
 )
 
 # Configure logging
+
 
 @app.get("/")
 async def health_check():
@@ -226,14 +228,45 @@ DOWNLOAD_DIR = Path("downloads")
 for directory in [UPLOAD_DIR, OUTPUT_DIR, DOWNLOAD_DIR]:
     directory.mkdir(exist_ok=True)
 
+def format_speed(bytes_per_sec):
+    if not bytes_per_sec:
+        return "0 B/s"
+    try:
+        bytes_per_sec = float(bytes_per_sec)
+    except Exception:
+        return "0 B/s"
+    for unit in ['B/s', 'KB/s', 'MB/s', 'GB/s']:
+        if bytes_per_sec < 1024:
+            return f"{bytes_per_sec:.1f} {unit}"
+        bytes_per_sec /= 1024
+    return f"{bytes_per_sec:.1f} TB/s"
+
+def format_eta(seconds):
+    if seconds is None:
+        return "Calculating..."
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return "Calculating..."
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
 # Global download progress tracking
 download_progress = {
     'status': 'idle',
     'downloaded_bytes': 0,
     'total_bytes': 0,
-    'speed': 0,
-    'eta': 0,
-    'filename': ''
+    'speed': '0 B/s',
+    'eta': 'Calculating...',
+    'filename': '',
+    'progress': 0,
+    'downloaded': 0,
+    'total': 0,
+    'is_downloading': False,
+    'title': ''
 }
 progress_lock = Lock()
 
@@ -242,28 +275,38 @@ async def remove_background_handler(files: List[UploadFile] = File(...)):
     try:
         output_files = []
         for file in files:
-            # Save uploaded file
             file_path = UPLOAD_DIR / file.filename
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # Process image using the local withoutbg package
-            input_image = Image.open(file_path)
-            logger.info(f"Input image format: {input_image.format}, mode: {input_image.mode}")
-            
-            # Remove background
-            result = remove(input_image)
-            logger.info(f"Result mode: {result.mode}")
-            
-            # Always save as PNG to preserve transparency
-            output_filename = f"nobg_{Path(file.filename).stem}.png"
-            output_path = OUTPUT_DIR / output_filename
-            result.save(str(output_path), 'PNG', optimize=True)
-            
-            output_files.append({
-                "filename": output_filename,
-                "url": f"/api/download/{output_filename}"
-            })
+            try:
+                # Save uploaded file
+                with open(file_path, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+                
+                # Process image in a separate thread to avoid blocking the FastAPI event loop
+                def process_image(fp, out_p):
+                    with Image.open(fp) as input_image:
+                        logger.info(f"Input image format: {input_image.format}, mode: {input_image.mode}")
+                        # Remove background
+                        result = remove(input_image)
+                        logger.info(f"Result mode: {result.mode}")
+                        # Always save as PNG to preserve transparency
+                        result.save(str(out_p), 'PNG', optimize=True)
+
+                output_filename = f"nobg_{Path(file.filename).stem}.png"
+                output_path = OUTPUT_DIR / output_filename
+                
+                await run_in_threadpool(process_image, file_path, output_path)
+                
+                output_files.append({
+                    "filename": output_filename,
+                    "url": f"/api/download/{output_filename}"
+                })
+            finally:
+                # Always clean up the uploaded temporary source file
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                except Exception as ex:
+                    logger.warning(f"Failed to delete temp upload {file_path}: {ex}")
         
         return {"message": "Background removal processed", "files": output_files}
     except Exception as e:
@@ -275,62 +318,112 @@ async def convert_image(
     files: List[UploadFile] = File(...),
     format: str = Form(...),
     width: Optional[int] = Form(None),
-    height: Optional[int] = Form(None)
+    height: Optional[int] = Form(None),
+    quality: int = Form(90),
+    maintain_aspect_ratio: bool = Form(True),
+    strip_metadata: bool = Form(True),
+    filter_type: str = Form("none"),
+    rotation: int = Form(0)
 ):
     try:
-        logger.info(f"Converting images. Format: {format}, Width: {width}, Height: {height}")
+        logger.info(f"Converting images. Format: {format}, Width: {width}, Height: {height}, Quality: {quality}, MaintainRatio: {maintain_aspect_ratio}, Strip: {strip_metadata}, Filter: {filter_type}, Rotation: {rotation}")
         output_files = []
         
         for file in files:
-            # Save uploaded file
             file_path = UPLOAD_DIR / file.filename
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            logger.info(f"File saved to {file_path}")
-            
-            # Open and process image
-            img = Image.open(file_path)
-            logger.info(f"Original image size: {img.size}")
-            
-            # Resize if dimensions provided
-            if width and height:
-                img = img.resize((width, height), Image.Resampling.LANCZOS)
-                logger.info(f"Resized to: {img.size}")
-            
-            # Convert and save
-            output_filename = f"converted_{Path(file.filename).stem}.{format.lower()}"
-            output_path = OUTPUT_DIR / output_filename
-            
-            # Ensure format is uppercase and handle special cases
-            format_upper = format.upper()
-            save_kwargs = {}
-            
-            # Handle JPEG format
-            if format_upper == 'JPG':
-                format_upper = 'JPEG'
-            
-            # Handle transparency for PNG
-            if format_upper == 'PNG':
-                save_kwargs['optimize'] = True
-            elif format_upper == 'JPEG':
-                # Convert to RGB if saving as JPEG
-                if img.mode in ('RGBA', 'P'):
-                    img = img.convert('RGB')
-                save_kwargs['quality'] = 95
-                save_kwargs['optimize'] = True
-            elif format_upper == 'WEBP':
-                save_kwargs['quality'] = 95
-                save_kwargs['method'] = 6
-            
-            logger.info(f"Saving as {format_upper} to {output_path}")
-            img.save(str(output_path), format=format_upper, **save_kwargs)
-            logger.info("Save completed")
-            
-            output_files.append({
-                "filename": output_filename,
-                "url": f"/api/download/{output_filename}"
-            })
+            try:
+                # Save uploaded file
+                with open(file_path, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+                
+                logger.info(f"File saved to {file_path}")
+                
+                # Perform image loading, resizing, and saving in a threadpool to prevent blocking the event loop
+                def process_conversion(fp, out_p, fmt, w, h, qual, maintain_ratio, strip_meta, filt, rot):
+                    with Image.open(fp) as img:
+                        logger.info(f"Original image size: {img.size}")
+                        
+                        # Handle rotation
+                        if rot != 0:
+                            # Pillow rotates counter-clockwise, so negative rot for clockwise
+                            img = img.rotate(-rot, expand=True)
+                        
+                        # Handle filters
+                        if filt == "grayscale":
+                            img = ImageOps.grayscale(img)
+                        elif filt == "blur":
+                            # Convert to RGB before blurring if it has a palette to avoid errors
+                            if img.mode == 'P':
+                                img = img.convert('RGB')
+                            img = img.filter(ImageFilter.GaussianBlur(2))
+                        
+                        # Strip metadata (by just not passing the info dict when saving, but we can explicitly clear it)
+                        if strip_meta:
+                            img.info.pop('exif', None)
+                        else:
+                            # retain exif if possible, though Pillow loses it by default unless explicitly saved
+                            pass
+                            
+                        # Resize
+                        if w or h:
+                            if maintain_ratio:
+                                # Provide the box it should fit into
+                                target_w = w if w else img.width
+                                target_h = h if h else img.height
+                                img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+                                logger.info(f"Resized (thumbnail) to: {img.size}")
+                            else:
+                                target_w = w if w else img.width
+                                target_h = h if h else img.height
+                                img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                                logger.info(f"Resized (absolute) to: {img.size}")
+                        
+                        format_upper = fmt.upper()
+                        save_kwargs = {}
+                        
+                        if format_upper == 'JPG':
+                            format_upper = 'JPEG'
+                        
+                        # Strip EXIF info properly if explicitly requested, else attempt to keep it
+                        if not strip_meta and 'exif' in img.info:
+                            save_kwargs['exif'] = img.info['exif']
+                            
+                        if format_upper == 'PNG':
+                            save_kwargs['optimize'] = True
+                        elif format_upper == 'JPEG':
+                            if img.mode in ('RGBA', 'P', 'LA'):
+                                img = img.convert('RGB')
+                            save_kwargs['quality'] = qual
+                            save_kwargs['optimize'] = True
+                        elif format_upper == 'WEBP':
+                            save_kwargs['quality'] = qual
+                            save_kwargs['method'] = 6
+                        elif format_upper == 'ICO':
+                            # ICO format requires specific icon sizes, but Pillow handles a lot automatically.
+                            # ensure it's RGBA or RGB
+                            if img.mode not in ('RGBA', 'RGB'):
+                                img = img.convert('RGBA')
+                        
+                        logger.info(f"Saving as {format_upper} to {out_p}")
+                        img.save(str(out_p), format=format_upper, **save_kwargs)
+                        logger.info("Save completed")
+
+                output_filename = f"converted_{Path(file.filename).stem}.{format.lower()}"
+                output_path = OUTPUT_DIR / output_filename
+                
+                await run_in_threadpool(process_conversion, file_path, output_path, format, width, height, quality, maintain_aspect_ratio, strip_metadata, filter_type, rotation)
+                
+                output_files.append({
+                    "filename": output_filename,
+                    "url": f"/api/download/{output_filename}"
+                })
+            finally:
+                # Always clean up the uploaded temporary source file
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                except Exception as ex:
+                    logger.warning(f"Failed to delete temp upload {file_path}: {ex}")
         
         return {"message": "Image conversion processed", "files": output_files}
     except Exception as e:
@@ -361,13 +454,30 @@ class ProgressHandler:
             elif d['status'] == 'error':
                 self.status = 'error'
 
+            # Calculate progress percentage
+            progress_pct = 0
+            if self.total_bytes and self.total_bytes > 0:
+                progress_pct = round((self.downloaded_bytes / self.total_bytes) * 100, 1)
+
+            # Format strings
+            speed_str = format_speed(self.speed)
+            eta_str = format_eta(self.eta) if self.eta is not None else "Calculating..."
+            is_dl = self.status == 'downloading'
+            title_val = Path(self.filename).name if self.filename else ''
+
             download_progress.update({
                 'status': self.status,
                 'downloaded_bytes': self.downloaded_bytes,
                 'total_bytes': self.total_bytes,
-                'speed': self.speed,
-                'eta': self.eta,
-                'filename': self.filename
+                'speed': speed_str,  # Send formatted speed string for fronted rendering
+                'eta': eta_str,      # Send formatted eta string for frontend rendering
+                'filename': self.filename,
+                # Frontend expected keys
+                'progress': progress_pct,
+                'downloaded': self.downloaded_bytes,
+                'total': self.total_bytes,
+                'is_downloading': is_dl,
+                'title': title_val
             })
 
 @app.get("/api/download-progress")
@@ -380,12 +490,12 @@ async def get_download_progress():
 async def get_video_info(url: str = Form(...)):
     try:
         # Configure yt-dlp options for format extraction
+        # Don't restrict to Android player to get all available formats
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
-            # Don't download, just extract info
-            'format': None,
+            'no_check_certificates': True,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -393,62 +503,50 @@ async def get_video_info(url: str = Form(...)):
             logger.info(f"Fetching video info for: {url}")
             info = ydl.extract_info(url, download=False)
             
-            # Get available formats
-            formats = []
-            seen_resolutions = set()  # Track unique resolution+fps combinations
-            
-            # First get all formats
-            all_formats = []
+            # Filter and sort raw formats by quality (resolution, framerate, and filesize)
+            raw_formats = []
             for f in info.get('formats', []):
                 # Skip audio-only formats and formats without video
-                if f.get('vcodec', '') == 'none' or not f.get('height'):
+                vcodec = f.get('vcodec', '')
+                if vcodec == 'none' or vcodec == '' or not f.get('height'):
                     continue
-                
-                # Get resolution
+                raw_formats.append(f)
+
+            # Sort raw formats so that best quality comes first (height desc, fps desc, filesize desc)
+            def get_sort_key(f):
+                h = f.get('height', 0) or 0
+                fps = f.get('fps', 30) or 30
+                size = f.get('filesize') or f.get('filesize_approx') or 0
+                return (h, fps, size)
+
+            raw_formats.sort(key=get_sort_key, reverse=True)
+
+            # Deduplicate by resolution + fps, keeping the highest quality version
+            formats = []
+            seen_resolutions = set()
+            for f in raw_formats:
                 height = f.get('height', 0)
-                fps = f.get('fps', 0)
-                filesize = f.get('filesize', 0) or f.get('filesize_approx', 0)
-                
+                fps = f.get('fps', 30) or 30
                 resolution = f"{height}p"
                 if fps > 30:
-                    resolution += f" {fps}fps"
+                    resolution += f" {int(fps)}fps"
                 
-                resolution_key = f"{height}_{fps}"
-                
-                # Store potential formats; we want to keep the best bitrate/quality for each resolution
-                # For adaptive streams (video only), we can still use them as they'll be merged
-                all_formats.append({
-                    'format_id': f['format_id'],
-                    'resolution': resolution,
-                    'filesize_approx': filesize,
-                    'vcodec': f.get('vcodec', ''),
-                    'fps': fps,
-                    'height': height,
-                    'tbr': f.get('tbr', 0) or 0, # Total bitrate, useful for tie-breaking
-                })
-
-            # Sort all formats by height (desc), then fps (desc), then tbr (desc)
-            all_formats.sort(key=lambda x: (-x['height'], -x['fps'], -x['tbr']))
-            
-            # Filter duplicates, keeping only the best quality for each resolution/fps combo
-            for f in all_formats:
-                resolution_key = f"{f['height']}_{f['fps']}"
+                resolution_key = f"{height}_{int(fps)}"
                 if resolution_key not in seen_resolutions:
                     seen_resolutions.add(resolution_key)
-                    # Clean up internal keys
-                    out_fmt = f.copy()
-                    del out_fmt['height']
-                    del out_fmt['tbr']
-                    formats.append(out_fmt)
-            
-            # Sort formats by resolution (height) and fps
-            formats.sort(key=lambda x: (
-                int(x['resolution'].split('p')[0]),
-                x.get('fps', 0)
-            ), reverse=True)
+                    filesize = f.get('filesize') or f.get('filesize_approx') or 0
+                    formats.append({
+                        'format_id': f['format_id'],
+                        'resolution': resolution,
+                        'filesize_approx': filesize,
+                        'vcodec': f.get('vcodec', ''),
+                        'fps': fps,
+                    })
             
             # Get duration in seconds
             duration = info.get('duration', 0)
+            
+            logger.info(f"Found {len(formats)} video formats for: {info.get('title', '')}")
             
             return {
                 'title': info.get('title', ''),
@@ -483,9 +581,14 @@ async def download_video(
                 'status': 'starting',
                 'downloaded_bytes': 0,
                 'total_bytes': 0,
-                'speed': 0,
-                'eta': 0,
-                'filename': ''
+                'speed': '0 B/s',
+                'eta': 'Calculating...',
+                'filename': '',
+                'progress': 0,
+                'downloaded': 0,
+                'total': 0,
+                'is_downloading': True,
+                'title': ''
             })
 
         # Ensure download directory exists
@@ -497,18 +600,19 @@ async def download_video(
         # Base options for faster downloads
         base_opts = {
             'outtmpl': str(DOWNLOAD_DIR / '%(title)s.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,
+            'no_warnings': False,
             'extract_flat': False,
             'concurrent_fragments': 3,
             'progress_hooks': [progress.progress_hook],
             'retries': 5,
             'fragment_retries': 5,
-            'ignoreerrors': True,
             'no_color': True,
             'noprogress': True,
             'noplaylist': True,
             'no_check_certificates': True,
+            'restrictfilenames': True,  # Sanitize filenames for Windows compatibility
+            'windowsfilenames': True,   # Ensure Windows-safe filenames
         }
 
         # Add cookie file only if it exists
@@ -518,22 +622,21 @@ async def download_video(
         if cookie_file.exists():
             base_opts['cookiefile'] = str(cookie_file)
         
+        # Add cookies file if it exists
+        cookies_path = Path('/app/backend/cookies/cookies.txt')
+        if cookies_path.exists():
+            base_opts['cookiefile'] = str(cookies_path)
+        
         # Configure yt-dlp options based on whether audio_only is selected
         if audio_only:
             ydl_opts = {
                 **base_opts,
-                'format': 'bestaudio',
+                'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',  # Always use mp3 for audio
-                    'preferredquality': '320',  # Use high quality
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '320',
                 }],
-                'postprocessor_args': [
-                    '-threads', '3',
-                    '-b:a', '320k',  # Set bitrate
-                    '-ar', '44100',  # Set sample rate
-                    '-ac', '2',      # Set channels (stereo)
-                ],
                 # Skip unnecessary steps
                 'updatetime': False,
                 'writeinfojson': False,
@@ -541,25 +644,18 @@ async def download_video(
                 'writethumbnail': False,
                 'writesubtitles': False,
             }
+            logger.info("Downloading audio only (MP3)")
         else:
             # For video, always include audio and use specific format
             if format_id:
-                format_spec = f'{format_id}+bestaudio[ext=m4a]/best'
+                format_spec = f'{format_id}+bestaudio/best'
             else:
-                format_spec = 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b'
+                format_spec = 'bestvideo+bestaudio/best'
             
             ydl_opts = {
                 **base_opts,
                 'format': format_spec,
-                'merge_output_format': 'mp4',  # Always use mp4 for videos
-                'postprocessor_args': [
-                    '-threads', '3',
-                    '-preset', 'medium',  # Better quality/size ratio
-                    '-movflags', '+faststart',  # Enable streaming
-                    '-c:a', 'aac',        # Use AAC audio codec
-                    '-b:a', '192k',       # Audio bitrate
-                    '-c:v', 'libx264',    # Video codec
-                ],
+                'merge_output_format': 'mp4',
             }
             logger.info(f"Using format specification: {format_spec}")
         
@@ -571,15 +667,27 @@ async def download_video(
             if not info:
                 raise HTTPException(status_code=400, detail="Failed to extract video information or video unavailable")
 
-            # Get the actual filename that was saved
-            filename = ydl.prepare_filename(info)
-            
-            # For audio-only downloads, we need to modify the extension
+                        # Get the actual filename by finding the most recent file in downloads
             if audio_only:
-                filename = str(Path(filename).with_suffix(f'.{format}'))
+                # For audio-only, find the actual mp3 file
+                media_files = list(DOWNLOAD_DIR.glob('*.mp3'))
+            else:
+                # For video, find mp4 or webm files
+                media_files = list(DOWNLOAD_DIR.glob('*.mp4')) + list(DOWNLOAD_DIR.glob('*.webm'))
             
-            final_filename = Path(filename).name
-            logger.info(f"File downloaded as: {final_filename}")
+            if media_files:
+                # Get the most recently modified file
+                final_file = max(media_files, key=lambda p: p.stat().st_mtime)
+                final_filename = final_file.name
+                logger.info(f"Found downloaded file: {final_filename}")
+            else:
+                # Fallback: use prepare_filename
+                filename = ydl.prepare_filename(info)
+                if audio_only:
+                    final_filename = Path(filename).with_suffix('.mp3').name
+                else:
+                    final_filename = Path(filename).with_suffix('.mp4').name
+                logger.warning(f"No file found in downloads, using expected name: {final_filename}")
             
             return {
                 "title": info.get("title"),
@@ -624,6 +732,33 @@ async def download_file(filename: str):
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+MAX_AGE_SECONDS = 3600 * 24 # 24 hours
+
+async def cleanup_old_files():
+    """Background task to delete files older than 24 hours."""
+    while True:
+        now = time.time()
+        for directory in [UPLOAD_DIR, OUTPUT_DIR, DOWNLOAD_DIR]:
+            if not directory.exists():
+                continue
+            for file_path in directory.glob("*"):
+                if file_path.is_file() and file_path.name != "cookies.txt":
+                    try:
+                        # Check if file is older than MAX_AGE_SECONDS
+                        if now - file_path.stat().st_mtime > MAX_AGE_SECONDS:
+                            file_path.unlink()
+                            logger.info(f"Cleaned up old file: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete old file {file_path}: {e}")
+        
+        # Sleep for an hour before checking again
+        await asyncio.sleep(3600)
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting background cleanup task...")
+    asyncio.create_task(cleanup_old_files())
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
