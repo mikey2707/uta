@@ -5,6 +5,7 @@ requests==2.31.0
 click==8.1.7
 tqdm==4.66.2
 huggingface-hub==0.20.3
+numpy<2.0.0
 rembg
 onnxruntime
 yt-dlp
