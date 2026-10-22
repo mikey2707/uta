@@ -1,388 +1,362 @@
-import { useState, useCallback, useEffect } from 'react'
+import React, { useState } from "react"
+import axios from "axios"
+import confetti from "canvas-confetti"
 import {
-  Button,
-  FormControl,
-  FormLabel,
-  NumberInput,
-  NumberInputField,
-  Select,
-  VStack,
-  Text,
-  Box,
-  useToast,
-  Progress,
-  SimpleGrid,
-  IconButton,
-  HStack,
-  useColorModeValue,
-  Slider,
-  SliderTrack,
-  SliderFilledTrack,
-  SliderThumb,
-  Checkbox,
-  Image,
-} from '@chakra-ui/react'
-import { useDropzone } from 'react-dropzone'
-import axios from 'axios'
-import { CloseIcon, DownloadIcon } from '@chakra-ui/icons'
-import { API_URL } from '../config'
+  Download,
+  Trash2,
+  RefreshCw,
+  CheckCircle2,
+  Lock,
+  Unlock,
+  Sparkles,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
+import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
+import { FileUpload } from "@/components/ui/file-upload"
+import { cn } from "@/lib/utils"
+import { API_URL } from "../config"
 
 interface ProcessedFile {
   filename: string
   url: string
 }
 
-const FilePreview = ({ file }: { file: File }) => {
-  const [url, setUrl] = useState<string>('')
-  
-  useEffect(() => {
-    const objectUrl = URL.createObjectURL(file)
-    setUrl(objectUrl)
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [file])
+const SUPPORTED_FORMATS = [
+  { id: "webp", label: "WebP (Modern & Lightweight)", ext: ".webp" },
+  { id: "png", label: "PNG (Lossless with Transparency)", ext: ".png" },
+  { id: "jpg", label: "JPEG / JPG (Standard Photo)", ext: ".jpg" },
+  { id: "avif", label: "AVIF (Next-Gen High Efficiency)", ext: ".avif" },
+  { id: "ico", label: "ICO (Favicon & Icons)", ext: ".ico" },
+  { id: "bmp", label: "BMP (Uncompressed Bitmap)", ext: ".bmp" },
+]
 
-  return (
-    <Image 
-      src={url} 
-      alt={file.name} 
-      objectFit="cover" 
-      h="120px" 
-      w="full" 
-      borderRadius="md" 
-      mb={2}
-      bg="gray.100"
-    />
-  )
-}
-
-const ImageConverter = () => {
+const ImageConverter: React.FC = () => {
   const [files, setFiles] = useState<File[]>([])
-  const [format, setFormat] = useState('png')
-  const [width, setWidth] = useState<number | null>(null)
-  const [height, setHeight] = useState<number | null>(null)
-  const [quality, setQuality] = useState(90)
+  const [format, setFormat] = useState("webp")
+  const [quality, setQuality] = useState(85)
+  const [width, setWidth] = useState<string>("")
+  const [height, setHeight] = useState<string>("")
   const [maintainRatio, setMaintainRatio] = useState(true)
   const [stripMetadata, setStripMetadata] = useState(true)
-  const [filterType, setFilterType] = useState('none')
-  const [rotation, setRotation] = useState('0')
-  const [isLoading, setIsLoading] = useState(false)
+  const [filterType] = useState("none")
+  const [rotation, setRotation] = useState(0)
+
+  const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([])
-  const toast = useToast()
-
-  const borderColor = useColorModeValue('gray.200', 'gray.600')
-  const hoverBorderColor = useColorModeValue('blue.500', 'blue.300')
-  const bgColor = useColorModeValue('gray.50', 'gray.700')
-  const boxBg = useColorModeValue('white', 'gray.800')
-
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    setFiles(prev => [...prev, ...acceptedFiles])
-  }, [])
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.ico', '.webp']
-    },
-  })
-
-  const removeFile = (index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index))
-  }
 
   const handleConvert = async () => {
     if (files.length === 0) return
-
-    setIsLoading(true)
+    setIsProcessing(true)
     setProgress(0)
+
     try {
       const formData = new FormData()
-      files.forEach(file => {
-        formData.append('files', file)
-      })
-      formData.append('format', format)
-      if (width) formData.append('width', width.toString())
-      if (height) formData.append('height', height.toString())
-      formData.append('quality', quality.toString())
-      formData.append('maintain_aspect_ratio', maintainRatio.toString())
-      formData.append('strip_metadata', stripMetadata.toString())
-      formData.append('filter_type', filterType)
-      formData.append('rotation', rotation)
+      files.forEach((file) => formData.append("files", file))
+      formData.append("format", format)
+      formData.append("quality", quality.toString())
+      if (width) formData.append("width", width)
+      if (height) formData.append("height", height)
+      formData.append("maintain_aspect_ratio", maintainRatio.toString())
+      formData.append("strip_metadata", stripMetadata.toString())
+      formData.append("filter_type", filterType)
+      formData.append("rotation", rotation.toString())
 
-      const response = await axios.post(`${API_URL}/api/convert-image`, formData, {
+      const res = await axios.post(`${API_URL}/api/convert-image`, formData, {
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            )
             setProgress(percentCompleted)
           }
-        }
+        },
       })
-      setProcessedFiles(response.data.files || [])
-      
-      toast({
-        title: 'Success',
-        description: 'Images converted successfully',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      })
-    } catch (error) {
-      console.error('Conversion error:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to convert images',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      })
+
+      if (res.data?.files) {
+        setProcessedFiles(res.data.files)
+        confetti({
+          particleCount: 70,
+          spread: 60,
+          origin: { y: 0.6 },
+        })
+      }
+    } catch (err) {
+      console.error("Image conversion error:", err)
     } finally {
-      setIsLoading(false)
-      setProgress(100)
+      setIsProcessing(false)
     }
   }
 
-  const downloadFile = async (file: ProcessedFile) => {
-    try {
-      const response = await axios.get(`${API_URL}${file.url}`, {
-        responseType: 'blob'
-      })
-      const url = window.URL.createObjectURL(new Blob([response.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = file.filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('Download error:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to download file',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      })
-    }
+  const downloadFile = (url: string, filename: string) => {
+    const link = document.createElement("a")
+    link.href = `${API_URL}${url}`
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
   return (
-    <VStack spacing={6} align="stretch">
-      <Box
-        {...getRootProps()}
-        p={8}
-        border="2px dashed"
-        borderColor={isDragActive ? hoverBorderColor : borderColor}
-        borderRadius="xl"
-        bg={bgColor}
-        transition="all 0.2s"
-        _hover={{ borderColor: hoverBorderColor }}
-        cursor="pointer"
-      >
-        <input {...getInputProps()} />
-        <VStack spacing={2}>
-          <Text fontSize="lg" fontWeight="medium">
-            {isDragActive
-              ? "Drop the images here"
-              : "Drag 'n' drop images here, or click to select"}
-          </Text>
-          <Text fontSize="sm" color="gray.500">
-            Supports PNG, JPG, JPEG, ICO, WebP
-          </Text>
-        </VStack>
-      </Box>
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Upload & Format Selector Card */}
+      <Card className="border-red-500/20 shadow-xl">
+        <CardContent className="p-6 sm:p-8 space-y-6">
+          <FileUpload
+            files={files}
+            onChange={(newFiles) => setFiles(newFiles)}
+            onRemove={(idx) => {
+              setFiles((prev) => prev.filter((_, i) => i !== idx))
+              setProcessedFiles([])
+            }}
+            accept={{ "image/*": [".png", ".jpg", ".jpeg", ".webp", ".ico", ".bmp", ".gif"] }}
+            title="Upload Images to Convert & Compress"
+            description="Drag & drop multiple images (PNG, JPG, WebP, etc.)"
+          />
 
-      {files.length > 0 && (
-        <Box>
-          <Text fontWeight="medium" mb={2}>Selected Files:</Text>
-          <SimpleGrid columns={[1, 2, 3]} spacing={4}>
-            {files.map((file, index) => (
-              <Box
-                key={index}
-                p={2}
-                borderWidth={1}
-                borderRadius="md"
-                bg={boxBg}
-                position="relative"
-              >
-                <IconButton
-                  aria-label="Remove file"
-                  icon={<CloseIcon />}
-                  size="sm"
-                  position="absolute"
-                  top={1}
-                  right={1}
-                  onClick={() => removeFile(index)}
-                  zIndex={1}
-                  colorScheme="red"
-                  variant="solid"
+          {/* Target Format Pills */}
+          <div className="space-y-3 pt-2">
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
+              Target Output Format
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {SUPPORTED_FORMATS.map((fmt) => {
+                const isSelected = format === fmt.id
+                return (
+                  <button
+                    key={fmt.id}
+                    type="button"
+                    onClick={() => setFormat(fmt.id)}
+                    className={cn(
+                      "p-3 rounded-xl border text-left transition-all flex flex-col gap-1",
+                      isSelected
+                        ? "bg-red-600 text-white border-red-600 shadow-lg shadow-red-500/25 scale-[1.02]"
+                        : "bg-zinc-50 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-red-400"
+                    )}
+                  >
+                    <span className="text-xs font-bold uppercase">{fmt.id}</span>
+                    <span
+                      className={cn(
+                        "text-[11px] truncate",
+                        isSelected ? "text-red-100" : "text-zinc-500 dark:text-zinc-400"
+                      )}
+                    >
+                      {fmt.label}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Fine-Tuning Controls Accordion / Panel */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-zinc-200/60 dark:border-zinc-800/60">
+            {/* Quality Slider */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                  Image Quality
+                </span>
+                <span className="font-mono font-bold text-red-600 dark:text-red-400">
+                  {quality}%
+                </span>
+              </div>
+              <Slider
+                value={[quality]}
+                max={100}
+                min={10}
+                step={1}
+                onValueChange={(val) => setQuality(val[0])}
+              />
+              <p className="text-[11px] text-zinc-500">
+                Lower quality yields smaller file sizes (great for WebP & JPEG).
+              </p>
+            </div>
+
+            {/* Resize Inputs */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                  Custom Dimensions (Optional)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMaintainRatio(!maintainRatio)}
+                  className="flex items-center gap-1 text-[11px] text-red-600 dark:text-red-400 font-semibold"
+                >
+                  {maintainRatio ? (
+                    <>
+                      <Lock className="w-3 h-3" /> Keep Aspect Ratio
+                    </>
+                  ) : (
+                    <>
+                      <Unlock className="w-3 h-3" /> Free Ratio
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  placeholder="Width (px)"
+                  value={width}
+                  onChange={(e) => setWidth(e.target.value)}
+                  className="w-full h-10 px-3 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-red-500"
                 />
-                <FilePreview file={file} />
-                <Text noOfLines={1} fontSize="sm">{file.name}</Text>
-              </Box>
-            ))}
-          </SimpleGrid>
+                <span className="text-zinc-400">×</span>
+                <input
+                  type="number"
+                  placeholder="Height (px)"
+                  value={height}
+                  onChange={(e) => setHeight(e.target.value)}
+                  className="w-full h-10 px-3 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+            </div>
 
-          <VStack spacing={4} mt={4}>
-            <FormControl>
-              <FormLabel>Output Format</FormLabel>
-              <Select 
-                value={format}
-                onChange={(e) => setFormat(e.target.value)}
-                bg={boxBg}
+            {/* Rotation and Filters */}
+            <div className="flex items-center justify-between text-xs pt-2">
+              <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                Rotation: {rotation}°
+              </span>
+              <div className="flex gap-1.5">
+                {[0, 90, 180, 270].map((deg) => (
+                  <button
+                    key={deg}
+                    type="button"
+                    onClick={() => setRotation(deg)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors",
+                      rotation === deg
+                        ? "bg-red-600 text-white border-red-600"
+                        : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700"
+                    )}
+                  >
+                    {deg}°
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Strip metadata switch */}
+            <div className="flex items-center justify-between text-xs pt-2">
+              <div>
+                <p className="font-bold text-zinc-700 dark:text-zinc-300">
+                  Strip EXIF Metadata
+                </p>
+                <p className="text-[11px] text-zinc-500">
+                  Reduces file size and enhances privacy
+                </p>
+              </div>
+              <Switch
+                checked={stripMetadata}
+                onCheckedChange={(checked) => setStripMetadata(checked)}
+              />
+            </div>
+          </div>
+
+          {/* Action Row */}
+          <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-zinc-200/60 dark:border-zinc-800/60">
+            <span className="text-xs text-zinc-500">
+              {files.length} {files.length === 1 ? "file" : "files"} queued
+            </span>
+
+            <div className="flex items-center gap-3">
+              {files.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setFiles([])
+                    setProcessedFiles([])
+                  }}
+                  className="gap-1.5 text-xs text-zinc-600 dark:text-zinc-400"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Clear
+                </Button>
+              )}
+
+              <Button
+                onClick={handleConvert}
+                disabled={files.length === 0 || isProcessing}
+                variant="gradient"
+                className="font-bold gap-2"
+                size="lg"
               >
-                <option value="png">PNG</option>
-                <option value="jpg">JPEG</option>
-                <option value="webp">WebP</option>
-                <option value="ico">ICO</option>
-              </Select>
-            </FormControl>
+                {isProcessing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Converting Images...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Convert to {format.toUpperCase()}
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
 
-            {['jpg', 'webp'].includes(format) && (
-              <FormControl>
-                <FormLabel>Quality ({quality}%)</FormLabel>
-                <Slider value={quality} onChange={(v) => setQuality(v)} min={1} max={100}>
-                  <SliderTrack bg={borderColor}>
-                    <SliderFilledTrack bg="blue.500" />
-                  </SliderTrack>
-                  <SliderThumb boxSize={6} />
-                </Slider>
-              </FormControl>
-            )}
+          {isProcessing && (
+            <div className="space-y-2 pt-2">
+              <div className="flex justify-between text-xs font-semibold text-zinc-500">
+                <span>Processing conversions...</span>
+                <span>{progress}%</span>
+              </div>
+              <Progress value={progress} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-            <HStack spacing={4} width="full">
-              <FormControl>
-                <FormLabel>Width (optional)</FormLabel>
-                <NumberInput
-                  value={width || ''}
-                  onChange={(_, val) => setWidth(val)}
-                >
-                  <NumberInputField placeholder="Auto" bg={boxBg} />
-                </NumberInput>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Height (optional)</FormLabel>
-                <NumberInput
-                  value={height || ''}
-                  onChange={(_, val) => setHeight(val)}
-                >
-                  <NumberInputField placeholder="Auto" bg={boxBg} />
-                </NumberInput>
-              </FormControl>
-            </HStack>
-
-            <Checkbox 
-              isChecked={maintainRatio} 
-              onChange={(e) => setMaintainRatio(e.target.checked)}
-              colorScheme="blue"
-              alignSelf="flex-start"
-            >
-              Maintain Aspect Ratio
-            </Checkbox>
-
-            <HStack spacing={4} width="full">
-              <FormControl>
-                <FormLabel>Filter</FormLabel>
-                <Select value={filterType} onChange={(e) => setFilterType(e.target.value)} bg={boxBg}>
-                  <option value="none">None</option>
-                  <option value="grayscale">Grayscale</option>
-                  <option value="blur">Blur</option>
-                </Select>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Rotation</FormLabel>
-                <Select value={rotation} onChange={(e) => setRotation(e.target.value)} bg={boxBg}>
-                  <option value="0">0°</option>
-                  <option value="90">90°</option>
-                  <option value="180">180°</option>
-                  <option value="270">270°</option>
-                </Select>
-              </FormControl>
-            </HStack>
-
-            <Checkbox 
-              isChecked={stripMetadata} 
-              onChange={(e) => setStripMetadata(e.target.checked)}
-              colorScheme="blue"
-              alignSelf="flex-start"
-            >
-              Strip Metadata (Privacy)
-            </Checkbox>
-
-            <Button
-              colorScheme="blue"
-              onClick={handleConvert}
-              isLoading={isLoading}
-              width="full"
-            >
-              Convert {files.length} {files.length === 1 ? 'Image' : 'Images'}
-            </Button>
-          </VStack>
-        </Box>
-      )}
-
-      {isLoading && (
-        <Box borderWidth={1} borderRadius="lg" p={4} bg={boxBg}>
-          <VStack spacing={2}>
-            <Text fontWeight="medium">Converting Images...</Text>
-            <Progress
-              value={progress}
-              size="sm"
-              width="100%"
-              colorScheme="blue"
-              borderRadius="full"
-              bg={useColorModeValue('gray.100', 'gray.700')}
-            />
-            <Text fontSize="sm">{progress}% Complete</Text>
-          </VStack>
-        </Box>
-      )}
-
+      {/* Results Card */}
       {processedFiles.length > 0 && (
-        <Box>
-          <Text fontWeight="medium" mb={2}>Converted Files:</Text>
-          <SimpleGrid columns={[1, 2]} spacing={4}>
-            {processedFiles.map((file, index) => (
-              <Box
-                key={index}
-                p={4}
-                borderWidth={1}
-                borderRadius="md"
-                bg={boxBg}
-              >
-                <VStack spacing={4}>
-                  <Image 
-                    src={`${API_URL}${file.url}`} 
-                    alt={file.filename} 
-                    objectFit="cover" 
-                    h="200px" 
-                    w="full" 
-                    borderRadius="md" 
-                    bg="gray.100"
-                  />
-                  <HStack width="full" justify="space-between">
-                    <VStack align="start" spacing={0} flex={1} overflow="hidden">
-                      <Text noOfLines={1} width="full">{file.filename}</Text>
-                      <Text fontSize="sm" color="gray.500">
-                        Converted to: {format.toUpperCase()}
-                      </Text>
-                    </VStack>
-                    <IconButton
-                      aria-label="Download"
-                      icon={<DownloadIcon />}
-                      onClick={() => downloadFile(file)}
-                      colorScheme="green"
+        <Card className="border-emerald-500/30 shadow-2xl">
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                Successfully Converted {processedFiles.length}{" "}
+                {processedFiles.length === 1 ? "Image" : "Images"}
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              {processedFiles.map((file) => (
+                <div
+                  key={file.filename}
+                  className="flex items-center justify-between gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 shadow-sm"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <img
+                      src={`${API_URL}${file.url}`}
+                      alt={file.filename}
+                      className="w-10 h-10 rounded-lg object-cover bg-zinc-200 dark:bg-zinc-700 shrink-0"
                     />
-                  </HStack>
-                </VStack>
-              </Box>
-            ))}
-          </SimpleGrid>
-        </Box>
+                    <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+                      {file.filename}
+                    </p>
+                  </div>
+
+                  <Button
+                    size="sm"
+                    onClick={() => downloadFile(file.url, file.filename)}
+                    className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white shrink-0 text-xs px-2.5 py-1"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Save
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
-    </VStack>
+    </div>
   )
 }
 

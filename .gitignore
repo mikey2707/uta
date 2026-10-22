@@ -16,6 +16,9 @@ dist/
 backend/uploads/*
 backend/outputs/*
 backend/downloads/*
+uploads/*
+outputs/*
+downloads/*
 !backend/uploads/.gitkeep
 !backend/outputs/.gitkeep
 !backend/downloads/.gitkeep

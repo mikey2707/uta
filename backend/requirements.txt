@@ -8,4 +8,7 @@ huggingface-hub==0.20.3
 numpy<2.0.0
 rembg
 onnxruntime
-yt-dlp
+yt-dlp>=2025.1.1
+aiofiles
+pytest
+httpx

@@ -8,6 +8,9 @@ services:
     ports:
       - "8010:8000"  # Backend API
       - "3010:3000"  # Frontend
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
       - /var/lib/docker/volumes/unified-tool/_data/uploads:/app/backend/uploads
       - /var/lib/docker/volumes/unified-tool/_data/outputs:/app/backend/outputs
@@ -16,3 +19,8 @@ services:
       - PYTHONUNBUFFERED=1
       - NODE_ENV=production
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

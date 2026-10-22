@@ -1,26 +1,23 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from "react"
+import axios from "axios"
+import confetti from "canvas-confetti"
 import {
-  Button,
-  FormControl,
-  FormLabel,
-  Input,
-  Select,
-  VStack,
-  Text,
-  Box,
-  Image,
-  useToast,
-  Progress,
-  Switch,
-  HStack,
-  Stat,
-  StatLabel,
-  StatNumber,
-  StatGroup,
-  useColorModeValue
-} from '@chakra-ui/react'
-import axios from 'axios'
-import { API_URL } from '../config'
+  Download,
+  Search,
+  Sparkles,
+  Film,
+  Music,
+  AlertCircle,
+  Clock,
+  ClipboardPaste,
+  RefreshCw,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { Switch } from "@/components/ui/switch"
+import { Card, CardContent } from "@/components/ui/card"
+import { cn, formatBytes, formatSeconds } from "@/lib/utils"
+import { API_URL } from "../config"
 
 interface VideoFormat {
   format_id: string
@@ -34,369 +31,425 @@ interface VideoInfo {
   title: string
   duration: number
   thumbnail: string
+  uploader?: string
   formats: VideoFormat[]
-  download_path?: string
 }
 
-interface DownloadProgress {
-  progress: number
+interface TaskProgress {
+  task_id: string
   status: string
+  progress: number
   downloaded: number
   total: number
   speed: string
   eta: string
   is_downloading: boolean
   title: string
+  error?: string
 }
 
-const VideoDownloader = () => {
-  const [url, setUrl] = useState('')
-  const [selectedFormat, setSelectedFormat] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [isChecking, setIsChecking] = useState(false)
-  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+const VideoDownloader: React.FC = () => {
+  const [url, setUrl] = useState("")
+  const [selectedFormat, setSelectedFormat] = useState("")
   const [isAudioOnly, setIsAudioOnly] = useState(false)
-  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null)
-  const [downloadedFiles, setDownloadedFiles] = useState<Record<string, string>>({})
-  const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null)
-  const toast = useToast()
-  const boxBg = useColorModeValue('white', 'gray.800')
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+  const [currentTask, setCurrentTask] = useState<TaskProgress | null>(null)
+  const [downloadReadyPath, setDownloadReadyPath] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const pollRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     return () => {
-      if (pollInterval) {
-        clearInterval(pollInterval)
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
+
+  const handlePasteClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text) {
+        setUrl(text.trim())
+        triggerAnalysis(text.trim())
       }
+    } catch (e) {
+      console.warn("Clipboard access denied or unavailable", e)
     }
-  }, [pollInterval])
-
-  const formatDuration = (seconds: number | undefined) => {
-    if (!seconds) return '0:00'
-    
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const secs = Math.floor(seconds % 60)
-    
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-    }
-    return `${minutes}:${secs.toString().padStart(2, '0')}`
   }
 
-  const formatFileSize = (bytes: number) => {
-    if (!bytes) return 'Unknown size'
-    const sizes = ['Bytes', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(1024))
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`
-  }
-
-  const startProgressPolling = () => {
-    if (pollInterval) {
-      clearInterval(pollInterval)
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const response = await axios.get(`${API_URL}/api/download-progress`)
-        const progressData = response.data
-
-        if (!progressData) {
-          return
-        }
-
-        setDownloadProgress(progressData)
-        
-        if (progressData.status === 'downloading') {
-          setIsLoading(true)
-        } else if (progressData.status === 'finished') {
-          setIsLoading(false)
-          clearInterval(interval)
-          setPollInterval(null)
-          setDownloadProgress(null)
-        } else if (progressData.status === 'error') {
-          clearInterval(interval)
-          setPollInterval(null)
-          setIsLoading(false)
-          setDownloadProgress(null)
-          toast({
-            title: 'Error',
-            description: 'Download failed',
-            status: 'error',
-            duration: 3000,
-            isClosable: true,
-          })
-        }
-      } catch (error) {
-        console.error('Error polling progress:', error)
-        // Don't stop polling on network errors, they might be temporary
-      }
-    }, 1000)  // Reduced polling frequency to 1 second
-
-    setPollInterval(interval)
-  }
-
-  const handleUrlChange = (newUrl: string) => {
-    setUrl(newUrl)
+  const triggerAnalysis = async (targetUrl = url) => {
+    if (!targetUrl.trim()) return
+    setIsAnalyzing(true)
+    setErrorMessage(null)
     setVideoInfo(null)
-    setSelectedFormat('')
-    setDownloadedFiles({})
-  }
+    setDownloadReadyPath(null)
+    setSelectedFormat("")
 
-  const handleFetchInfo = async () => {
-    if (!url) return
-    setIsChecking(true)
-    setVideoInfo(null)
-    setSelectedFormat('')
     try {
       const formData = new FormData()
-      formData.append('url', url)
-      
-      const response = await axios.post(`${API_URL}/api/get-video-info`, formData)
-      const data = response.data
+      formData.append("url", targetUrl.trim())
+
+      const res = await axios.post(`${API_URL}/api/get-video-info`, formData)
+      const data = res.data
       if (!data || !data.formats) {
-        throw new Error('Invalid response data')
+        throw new Error("Invalid response received from server")
       }
       setVideoInfo(data)
       if (data.formats.length > 0) {
         setSelectedFormat(data.formats[0].format_id)
       }
-      toast({
-        title: 'Video Info Loaded',
-        description: `Successfully loaded info for "${data.title}"`,
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      })
-    } catch (error: unknown) {
-      console.error('Video info error:', error)
-      let errorMsg = 'Failed to fetch video information'
-      if (axios.isAxiosError(error) && error.response?.data?.detail) {
-        errorMsg = error.response.data.detail
+    } catch (err: unknown) {
+      console.error("Video analyze error:", err)
+      let msg = "Could not analyze video. Verify the URL is valid."
+      if (axios.isAxiosError(err) && err.response?.data?.detail) {
+        msg = err.response.data.detail
       }
-      toast({
-        title: 'Error',
-        description: errorMsg,
-        status: 'error',
-        duration: 4000,
-        isClosable: true,
-      })
-      setVideoInfo(null)
+      setErrorMessage(msg)
     } finally {
-      setIsChecking(false)
+      setIsAnalyzing(false)
     }
   }
 
-  const handleDownload = async () => {
-    if (!url) return
+  const startDownload = async () => {
+    if (!url.trim()) return
+    setIsDownloading(true)
+    setErrorMessage(null)
+    setDownloadReadyPath(null)
 
-    setIsLoading(true)
-    setDownloadProgress(null)
-    
+    const taskId = Math.random().toString(36).substring(2, 12)
+    setCurrentTask({
+      task_id: taskId,
+      status: "starting",
+      progress: 0,
+      downloaded: 0,
+      total: 0,
+      speed: "0 B/s",
+      eta: "Calculating...",
+      is_downloading: true,
+      title: videoInfo?.title || "",
+    })
+
+    // Start progress polling
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const progRes = await axios.get(`${API_URL}/api/download-progress/${taskId}`)
+        if (progRes.data) {
+          setCurrentTask(progRes.data)
+          if (progRes.data.status === "finished") {
+            clearInterval(pollRef.current!)
+            pollRef.current = null
+          }
+        }
+      } catch (e) {
+        console.warn("Polling progress error:", e)
+      }
+    }, 1000)
+
     try {
-      startProgressPolling()
-
       const formData = new FormData()
-      formData.append('url', url)
+      formData.append("url", url.trim())
+      formData.append("task_id", taskId)
+      formData.append("audio_only", isAudioOnly.toString())
       if (isAudioOnly) {
-        formData.append('format', 'mp3')
-      } else {
-        formData.append('format_id', selectedFormat)
+        formData.append("format", "mp3")
+      } else if (selectedFormat) {
+        formData.append("format_id", selectedFormat)
+        formData.append("format", "mp4")
       }
-      formData.append('audio_only', isAudioOnly.toString())
 
-      const response = await axios.post(`${API_URL}/api/download-video`, formData)
-      const data = response.data
-      if (!data) {
-        throw new Error('Invalid response data')
+      const res = await axios.post(`${API_URL}/api/download-video`, formData)
+      if (res.data?.download_path) {
+        setDownloadReadyPath(res.data.download_path)
+        confetti({
+          particleCount: 80,
+          spread: 60,
+          origin: { y: 0.7 },
+        })
       }
-      
-      const formatKey = isAudioOnly ? 'audio_only' : selectedFormat
-      setDownloadedFiles(prev => ({ ...prev, [formatKey]: data.download_path }))
-      
-      toast({
-        title: 'Success',
-        description: `${isAudioOnly ? 'Audio' : 'Video'} downloaded successfully`,
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      })
-    } catch (error) {
-      console.error('Download error:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to download',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      })
+    } catch (err: unknown) {
+      console.error("Download error:", err)
+      let msg = "Failed to download media. Please check server logs."
+      if (axios.isAxiosError(err) && err.response?.data?.detail) {
+        msg = err.response.data.detail
+      }
+      setErrorMessage(msg)
     } finally {
-      setPollInterval(prev => {
-        if (prev) clearInterval(prev)
-        return null
-      })
-      setIsLoading(false)
-      setDownloadProgress(null)
+      setIsDownloading(false)
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
     }
   }
 
-  const downloadFile = async (path: string) => {
-    if (!path) return
-
+  const triggerFileSave = async (filename: string) => {
     try {
-      const response = await axios.get(`${API_URL}/api/download/${encodeURIComponent(path)}`, {
-        responseType: 'blob'
-      })
-      const url = window.URL.createObjectURL(new Blob([response.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = path
+      const response = await axios.get(
+        `${API_URL}/api/download/${encodeURIComponent(filename)}`,
+        { responseType: "blob" }
+      )
+      const blobUrl = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement("a")
+      link.href = blobUrl
+      link.download = filename
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('File download error:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to download the file',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      })
+      window.URL.revokeObjectURL(blobUrl)
+    } catch (e) {
+      console.error("Save file error:", e)
     }
   }
 
   return (
-    <VStack spacing={4} align="stretch">
-      <FormControl>
-        <FormLabel>Video URL</FormLabel>
-        <HStack>
-          <Input
-            value={url}
-            onChange={(e) => handleUrlChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                handleFetchInfo()
-              }
-            }}
-            placeholder="Enter video URL (e.g. YouTube, Vimeo, TikTok)"
-          />
-          <Button
-            colorScheme="teal"
-            onClick={handleFetchInfo}
-            isLoading={isChecking}
-            isDisabled={!url}
-          >
-            Analyze
-          </Button>
-        </HStack>
-      </FormControl>
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Input Header Card */}
+      <Card className="border-red-500/20 shadow-2xl">
+        <CardContent className="p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            <div className="relative flex-1 w-full">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400 pointer-events-none" />
+              <input
+                type="text"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value)
+                  setErrorMessage(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") triggerAnalysis()
+                }}
+                placeholder="Paste video URL from YouTube, Vimeo, TikTok, etc..."
+                className="w-full h-12 pl-12 pr-28 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 transition-all"
+              />
+              <button
+                type="button"
+                onClick={handlePasteClipboard}
+                title="Paste from clipboard"
+                className="absolute right-3 top-1/2 -translate-y-1/2 px-2.5 py-1 text-xs font-semibold rounded-lg bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-700 dark:text-zinc-300 flex items-center gap-1 transition-colors"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                Paste
+              </button>
+            </div>
 
-      {isChecking && (
-        <Box textAlign="center" py={4}>
-          <Text fontSize="sm" color="gray.500" mb={2}>Checking video information...</Text>
-          <Progress size="xs" isIndeterminate borderRadius="full" colorScheme="gray" />
-        </Box>
-      )}
+            <Button
+              onClick={() => triggerAnalysis()}
+              disabled={!url.trim() || isAnalyzing}
+              className="w-full sm:w-auto h-12 px-6 rounded-xl font-bold gap-2 shrink-0"
+              variant="gradient"
+            >
+              {isAnalyzing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Analyze Video
+                </>
+              )}
+            </Button>
+          </div>
 
-      {videoInfo && videoInfo.formats && !isAudioOnly && (
-        <FormControl>
-          <FormLabel>Quality</FormLabel>
-          <Select 
-            value={selectedFormat}
-            onChange={(e) => setSelectedFormat(e.target.value)}
-          >
-            {videoInfo.formats.map((format) => (
-              <option key={format.format_id} value={format.format_id}>
-                {format.resolution} ({formatFileSize(format.filesize_approx)})
-              </option>
-            ))}
-          </Select>
-        </FormControl>
-      )}
-
-      <FormControl display="flex" alignItems="center">
-        <FormLabel htmlFor="audio-only" mb="0">
-          Audio Only
-        </FormLabel>
-        <Switch
-          id="audio-only"
-          isChecked={isAudioOnly}
-          onChange={(e) => setIsAudioOnly(e.target.checked)}
-        />
-      </FormControl>
-
-      {downloadedFiles[isAudioOnly ? 'audio_only' : selectedFormat] ? (
-        <Button
-          colorScheme="green"
-          onClick={() => downloadFile(downloadedFiles[isAudioOnly ? 'audio_only' : selectedFormat])}
-          isDisabled={!url || isChecking}
-        >
-          Save {isAudioOnly ? 'Audio' : 'Video'} to Computer
-        </Button>
-      ) : (
-        <Button
-          colorScheme="blue"
-          onClick={handleDownload}
-          isLoading={isLoading}
-          isDisabled={!url || isChecking}
-        >
-          {isAudioOnly ? 'Prepare Audio Download' : 'Prepare Video Download'}
-        </Button>
-      )}
-
-      {(isLoading || downloadProgress) && (
-        <Box borderWidth={1} borderRadius="lg" p={4} bg={boxBg}>
-          <VStack spacing={4}>
-            <Progress
-              value={downloadProgress?.progress || 0}
-              size="sm"
-              width="100%"
-              colorScheme="blue"
-              borderRadius="full"
-              bg={useColorModeValue('gray.100', 'gray.700')}
+          {/* Toggle Audio-Only */}
+          <div className="flex items-center justify-between pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60">
+            <div className="flex items-center gap-3">
+              <div
+                className={cn(
+                  "p-2 rounded-xl transition-colors",
+                  isAudioOnly
+                    ? "bg-red-500/15 text-red-600 dark:text-red-400"
+                    : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500"
+                )}
+              >
+                <Music className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Audio-Only Mode (MP3 320kbps)
+                </p>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Extract high quality audio without video
+                </p>
+              </div>
+            </div>
+            <Switch
+              checked={isAudioOnly}
+              onCheckedChange={(checked) => setIsAudioOnly(checked)}
             />
-            <StatGroup width="100%">
-              <Stat>
-                <StatLabel>Status</StatLabel>
-                <StatNumber fontSize="md">
-                  {downloadProgress?.status || 'Preparing download...'}
-                </StatNumber>
-              </Stat>
-              <Stat>
-                <StatLabel>Speed</StatLabel>
-                <StatNumber fontSize="md">
-                  {downloadProgress?.speed || '0 MB/s'}
-                </StatNumber>
-              </Stat>
-              <Stat>
-                <StatLabel>ETA</StatLabel>
-                <StatNumber fontSize="md">
-                  {downloadProgress?.eta || 'Calculating...'}
-                </StatNumber>
-              </Stat>
-            </StatGroup>
-            {downloadProgress && (
-              <Text fontSize="sm">
-                Downloaded: {formatFileSize(downloadProgress.downloaded)} / {formatFileSize(downloadProgress.total)}
-              </Text>
-            )}
-          </VStack>
-        </Box>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Error Message Alert */}
+      {errorMessage && (
+        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm space-y-1">
+            <p className="font-semibold">Unable to download video</p>
+            <p className="text-xs opacity-90">{errorMessage}</p>
+          </div>
+        </div>
       )}
 
+      {/* Video Details Card */}
       {videoInfo && (
-        <Box borderWidth={1} borderRadius="lg" p={4}>
-          <VStack spacing={3} align="stretch">
-            <Text fontWeight="bold">{videoInfo.title}</Text>
-            <Text>Duration: {formatDuration(videoInfo.duration)}</Text>
-            {!isAudioOnly && videoInfo.thumbnail && (
-              <Image src={videoInfo.thumbnail} maxH="200px" objectFit="contain" />
+        <Card className="overflow-hidden border-zinc-200/80 dark:border-zinc-800/80">
+          <div className="flex flex-col md:flex-row gap-6 p-6">
+            {videoInfo.thumbnail && (
+              <div className="relative w-full md:w-72 h-44 rounded-xl overflow-hidden bg-black shrink-0 shadow-md">
+                <img
+                  src={videoInfo.thumbnail}
+                  alt={videoInfo.title}
+                  className="w-full h-full object-cover"
+                />
+                {videoInfo.duration > 0 && (
+                  <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {formatSeconds(videoInfo.duration)}
+                  </span>
+                )}
+              </div>
             )}
-          </VStack>
-        </Box>
+
+            <div className="flex-1 space-y-4">
+              <div>
+                <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 line-clamp-2">
+                  {videoInfo.title}
+                </h3>
+                {videoInfo.uploader && (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                    By {videoInfo.uploader}
+                  </p>
+                )}
+              </div>
+
+              {/* Format selection */}
+              {!isAudioOnly && videoInfo.formats?.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
+                    Select Video Quality
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {videoInfo.formats.slice(0, 8).map((fmt) => {
+                      const isSelected = selectedFormat === fmt.format_id
+                      return (
+                        <button
+                          key={fmt.format_id}
+                          type="button"
+                          onClick={() => setSelectedFormat(fmt.format_id)}
+                          className={cn(
+                            "px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border flex items-center gap-1.5",
+                            isSelected
+                              ? "bg-red-600 text-white border-red-600 shadow-md shadow-red-500/20 scale-105"
+                              : "bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-red-400"
+                          )}
+                        >
+                          <Film className="w-3 h-3" />
+                          <span>{fmt.resolution}</span>
+                          {fmt.filesize_approx > 0 && (
+                            <span className="text-[10px] opacity-75 font-normal">
+                              ({formatBytes(fmt.filesize_approx)})
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-wrap items-center gap-3">
+                {downloadReadyPath ? (
+                  <Button
+                    onClick={() => triggerFileSave(downloadReadyPath)}
+                    className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20"
+                    size="lg"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save to Device ({downloadReadyPath})
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={startDownload}
+                    disabled={isDownloading}
+                    className="gap-2 font-bold"
+                    variant="gradient"
+                    size="lg"
+                  >
+                    {isDownloading ? (
+                      <>
+                        <RefreshCw className="w-5 h-5 animate-spin" />
+                        Downloading Media...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-5 h-5" />
+                        Download {isAudioOnly ? "Audio (MP3)" : "Video (MP4)"}
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </Card>
       )}
-    </VStack>
+
+      {/* Real-time Task Progress Box */}
+      {isDownloading && currentTask && (
+        <Card className="border-red-500/30 bg-red-500/5">
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-red-500 animate-spin" />
+                {currentTask.status === "finished"
+                  ? "Download Complete! Preparing file..."
+                  : "Downloading fragments..."}
+              </span>
+              <span className="font-mono font-bold text-red-600 dark:text-red-400">
+                {currentTask.progress}%
+              </span>
+            </div>
+
+            <Progress value={currentTask.progress} className="h-3" />
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 text-xs">
+              <div>
+                <p className="text-zinc-400">Speed</p>
+                <p className="font-semibold text-zinc-700 dark:text-zinc-300 mt-0.5">
+                  {currentTask.speed || "0 B/s"}
+                </p>
+              </div>
+              <div>
+                <p className="text-zinc-400">ETA</p>
+                <p className="font-semibold text-zinc-700 dark:text-zinc-300 mt-0.5">
+                  {currentTask.eta || "Calculating..."}
+                </p>
+              </div>
+              <div>
+                <p className="text-zinc-400">Downloaded</p>
+                <p className="font-semibold text-zinc-700 dark:text-zinc-300 mt-0.5">
+                  {formatBytes(currentTask.downloaded)}
+                </p>
+              </div>
+              <div>
+                <p className="text-zinc-400">Total Size</p>
+                <p className="font-semibold text-zinc-700 dark:text-zinc-300 mt-0.5">
+                  {formatBytes(currentTask.total)}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   )
 }
 

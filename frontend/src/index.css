@@ -1,119 +1,106 @@
-/* Reset styles */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* Base styles */
-html,
-body,
-#root {
-  min-height: 100vh;
-  width: 100%;
-}
-
-/* Ensure proper stacking context */
-#root {
-  isolation: isolate;
-  position: relative;
-}
-
-/* Force background color inheritance */
-.app-wrapper {
-  position: relative;
-  z-index: 0;
-  min-height: 100vh;
-  overflow: hidden;
-}
-
-/* Animated Mesh Gradients */
-
-.mesh-bg-light {
-  background: linear-gradient(120deg, #e0c3fc 0%, #8ec5fc 100%);
-  background-size: 200% 200%;
-  animation: gradientShift 15s ease infinite;
-}
-
-.mesh-bg-dark {
-  background: linear-gradient(120deg, #1e1332 0%, #10263f 100%);
-  background-size: 200% 200%;
-  animation: gradientShift 15s ease infinite;
-}
-
-@keyframes gradientShift {
-  0% {
-    background-position: 0% 50%;
+@layer base {
+  :root {
+    --background: 240 10% 98%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --primary: 0 72% 51%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 0 72% 95.9%;
+    --accent-foreground: 0 72% 35%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 0 72% 51%;
+    --radius: 1rem;
   }
-  50% {
-    background-position: 100% 50%;
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 5.5%;
+    --card-foreground: 0 0% 98%;
+    --primary: 0 72% 51%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 0 72% 15.9%;
+    --accent-foreground: 0 72% 75%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 0 72% 51%;
   }
-  100% {
-    background-position: 0% 50%;
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-red-500/30 selection:text-red-200;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    overflow-x: hidden;
   }
 }
 
-/* Animated orbs for added depth */
-.mesh-bg-light::before, .mesh-bg-dark::before,
-.mesh-bg-light::after, .mesh-bg-dark::after {
-  content: '';
-  position: absolute;
-  width: 60vw;
-  height: 60vw;
-  border-radius: 50%;
-  filter: blur(80px);
-  z-index: -1;
-  animation: float 20s infinite ease-in-out;
+/* Custom glowing and ambient background animations */
+.glow-mesh {
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(239, 68, 68, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(225, 29, 72, 0.15) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(244, 63, 94, 0.1) 0px, transparent 50%);
 }
 
-.mesh-bg-light::before {
-  background: rgba(255, 182, 255, 0.4);
-  top: -10vw;
-  left: -10vw;
+.dark .glow-mesh {
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(239, 68, 68, 0.22) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(225, 29, 72, 0.22) 0px, transparent 50%),
+    radial-gradient(at 50% 100%, rgba(244, 63, 94, 0.14) 0px, transparent 50%);
 }
 
-.mesh-bg-light::after {
-  background: rgba(182, 255, 255, 0.4);
-  bottom: -10vw;
-  right: -10vw;
-  animation-delay: -10s;
+/* Checkerboard pattern for transparent cutouts */
+.bg-checkerboard {
+  background-color: #ffffff;
+  background-image: 
+    linear-gradient(45deg, #e5e7eb 25%, transparent 25%), 
+    linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), 
+    linear-gradient(45deg, transparent 75%, #e5e7eb 75%), 
+    linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
 
-.mesh-bg-dark::before {
-  background: rgba(147, 51, 234, 0.15);
-  top: -10vw;
-  left: -10vw;
+.dark .bg-checkerboard {
+  background-color: #18181b;
+  background-image: 
+    linear-gradient(45deg, #27272a 25%, transparent 25%), 
+    linear-gradient(-45deg, #27272a 25%, transparent 25%), 
+    linear-gradient(45deg, transparent 75%, #27272a 75%), 
+    linear-gradient(-45deg, transparent 75%, #27272a 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
 
-.mesh-bg-dark::after {
-  background: rgba(59, 130, 246, 0.15);
-  bottom: -10vw;
-  right: -10vw;
-  animation-delay: -10s;
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
-
-@keyframes float {
-  0% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(5%, 5%) scale(1.05); }
-  66% { transform: translate(-5%, 2%) scale(0.95); }
-  100% { transform: translate(0, 0) scale(1); }
+::-webkit-scrollbar-track {
+  background: transparent;
 }
-
-/* Ensure container sits above the animated background */
-.chakra-container {
-  position: relative;
-  z-index: 1;
+::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.4);
+  border-radius: 9999px;
 }
-
-/* Tab panel styles */
-.chakra-tabs__tab-panel {
-  border-radius: 1rem;
-}
-
-/* Smooth transitions */
-body,
-#root,
-.chakra-container,
-.main-card {
-  transition: all 0.3s ease-in-out;
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.6);
 }

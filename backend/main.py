@@ -3,11 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uvicorn
 import os
+import uuid
+import subprocess
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import asyncio
 import time
 import shutil
+import requests
+from urllib.parse import urljoin
 from PIL import Image, ImageFilter, ImageOps
 import yt_dlp
 import logging
@@ -430,305 +434,410 @@ async def convert_image(
         logger.error(f"Error in convert_image: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-class ProgressHandler:
-    def __init__(self):
-        self.downloaded_bytes = 0
-        self.total_bytes = 0
-        self.speed = 0
-        self.eta = 0
-        self.status = 'starting'
-        self.filename = ''
+# In-memory storage for isolated download tasks
+active_downloads: Dict[str, Dict[str, Any]] = {}
+active_downloads_lock = Lock()
 
-    def progress_hook(self, d):
+def get_cookie_file() -> Optional[str]:
+    """Find valid cookie file path if it exists."""
+    candidates = [
+        Path(__file__).resolve().parent / 'cookies' / 'cookies.txt',
+        Path('/app/backend/cookies/cookies.txt'),
+        Path('cookies/cookies.txt'),
+        Path(__file__).resolve().parent / 'cookies.txt'
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file() and c.stat().st_size > 0:
+            return str(c)
+    return None
+
+def build_base_ytdlp_opts(progress_hook=None) -> Dict[str, Any]:
+    """Common yt-dlp options configured with Node.js and mobile client fallbacks."""
+    opts: Dict[str, Any] = {
+        'quiet': False,
+        'no_warnings': False,
+        'extract_flat': False,
+        'no_color': True,
+        'noprogress': True,
+        'noplaylist': True,
+        'no_check_certificates': True,
+        'retries': 5,
+        'fragment_retries': 5,
+        'concurrent_fragments': 3,
+        'restrictfilenames': True,
+        'windowsfilenames': True,
+        # Enable Node.js JS runtime for modern YouTube challenge solving
+        'js_runtimes': {'node': {}},
+        # Extractor fallbacks (android & ios bypass common datacenter IP blocks)
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web'],
+                'player_skip': ['configs', 'webpage'],
+            }
+        }
+    }
+    cookie_path = get_cookie_file()
+    if cookie_path:
+        opts['cookiefile'] = cookie_path
+    if progress_hook:
+        opts['progress_hooks'] = [progress_hook]
+    return opts
+
+class TaskProgressHandler:
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+
+    def progress_hook(self, d: Dict[str, Any]):
         global download_progress
+        status = d.get('status', 'downloading')
+        downloaded = d.get('downloaded_bytes', 0)
+        total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+        speed = d.get('speed', 0)
+        eta = d.get('eta', 0)
+        filename = d.get('filename', '')
+
+        progress_pct = 0.0
+        if total and total > 0:
+            progress_pct = round((downloaded / total) * 100, 1)
+
+        speed_str = format_speed(speed)
+        eta_str = format_eta(eta) if eta is not None else "Calculating..."
+        title_val = Path(filename).name if filename else ''
+
+        data = {
+            'task_id': self.task_id,
+            'status': status,
+            'downloaded_bytes': downloaded,
+            'total_bytes': total,
+            'speed': speed_str,
+            'eta': eta_str,
+            'filename': filename,
+            'progress': progress_pct,
+            'downloaded': downloaded,
+            'total': total,
+            'is_downloading': (status == 'downloading'),
+            'title': title_val,
+            'updated_at': time.time()
+        }
+
+        with active_downloads_lock:
+            if self.task_id in active_downloads:
+                active_downloads[self.task_id].update(data)
+            else:
+                active_downloads[self.task_id] = data
+
         with progress_lock:
-            if d['status'] == 'downloading':
-                self.downloaded_bytes = d.get('downloaded_bytes', 0)
-                self.total_bytes = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-                self.speed = d.get('speed', 0)
-                self.eta = d.get('eta', 0)
-                self.status = 'downloading'
-                self.filename = d.get('filename', '')
-            elif d['status'] == 'finished':
-                self.status = 'finished'
-            elif d['status'] == 'error':
-                self.status = 'error'
-
-            # Calculate progress percentage
-            progress_pct = 0
-            if self.total_bytes and self.total_bytes > 0:
-                progress_pct = round((self.downloaded_bytes / self.total_bytes) * 100, 1)
-
-            # Format strings
-            speed_str = format_speed(self.speed)
-            eta_str = format_eta(self.eta) if self.eta is not None else "Calculating..."
-            is_dl = self.status == 'downloading'
-            title_val = Path(self.filename).name if self.filename else ''
-
-            download_progress.update({
-                'status': self.status,
-                'downloaded_bytes': self.downloaded_bytes,
-                'total_bytes': self.total_bytes,
-                'speed': speed_str,  # Send formatted speed string for fronted rendering
-                'eta': eta_str,      # Send formatted eta string for frontend rendering
-                'filename': self.filename,
-                # Frontend expected keys
-                'progress': progress_pct,
-                'downloaded': self.downloaded_bytes,
-                'total': self.total_bytes,
-                'is_downloading': is_dl,
-                'title': title_val
-            })
+            download_progress.update(data)
 
 @app.get("/api/download-progress")
 async def get_download_progress():
+    """Legacy global progress endpoint for backward compatibility."""
     global download_progress
     with progress_lock:
         return download_progress
 
-@app.post("/api/get-video-info")
-def get_video_info(url: str = Form(...)):
+@app.get("/api/download-progress/{task_id}")
+async def get_task_download_progress(task_id: str):
+    """Isolated download progress endpoint per task."""
+    with active_downloads_lock:
+        task_data = active_downloads.get(task_id)
+        if task_data:
+            return task_data
+    # Return placeholder if not yet populated
+    return {
+        'task_id': task_id,
+        'status': 'starting',
+        'progress': 0,
+        'downloaded': 0,
+        'total': 0,
+        'speed': '0 B/s',
+        'eta': 'Calculating...',
+        'is_downloading': True,
+        'title': ''
+    }
+
+def _extract_video_info_sync(url: str):
+    opts = build_base_ytdlp_opts()
+    opts.update({
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+    })
     try:
-        # Configure yt-dlp options for format extraction
-        # Don't restrict to Android player to get all available formats
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'no_check_certificates': True,
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            logger.info(f"Extracting info for URL: {url}")
+            return ydl.extract_info(url, download=False)
+    except Exception as e:
+        err_msg = str(e)
+        if "name resolution" in err_msg.lower() or "errno -3" in err_msg.lower():
+            logger.error(f"DNS Resolution Error during video extraction: {err_msg}")
+            raise HTTPException(
+                status_code=502,
+                detail="Network DNS resolution failed inside container. Ensure Docker DNS is configured with 8.8.8.8 in docker-compose.yml."
+            )
+        raise
+
+@app.post("/api/get-video-info")
+async def get_video_info(url: str = Form(...)):
+    try:
+        info = await run_in_threadpool(_extract_video_info_sync, url)
+        if not info:
+            raise HTTPException(status_code=400, detail="Could not retrieve video information")
+
+        raw_formats = []
+        for f in info.get('formats', []):
+            vcodec = f.get('vcodec', '')
+            if vcodec == 'none' or vcodec == '' or not f.get('height'):
+                continue
+            raw_formats.append(f)
+
+        def get_sort_key(f):
+            h = f.get('height', 0) or 0
+            fps = f.get('fps', 30) or 30
+            size = f.get('filesize') or f.get('filesize_approx') or 0
+            return (h, fps, size)
+
+        raw_formats.sort(key=get_sort_key, reverse=True)
+
+        formats = []
+        seen_resolutions = set()
+        for f in raw_formats:
+            height = f.get('height', 0)
+            fps = f.get('fps', 30) or 30
+            resolution = f"{height}p"
+            if fps > 30:
+                resolution += f" {int(fps)}fps"
+
+            resolution_key = f"{height}_{int(fps)}"
+            if resolution_key not in seen_resolutions:
+                seen_resolutions.add(resolution_key)
+                filesize = f.get('filesize') or f.get('filesize_approx') or 0
+                formats.append({
+                    'format_id': f['format_id'],
+                    'resolution': resolution,
+                    'filesize_approx': filesize,
+                    'vcodec': f.get('vcodec', ''),
+                    'fps': fps,
+                })
+
+        return {
+            'title': info.get('title', 'Unknown Title'),
+            'thumbnail': info.get('thumbnail', ''),
+            'uploader': info.get('uploader') or info.get('channel') or '',
+            'formats': formats,
+            'duration': info.get('duration', 0)
         }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract video info
-            logger.info(f"Fetching video info for: {url}")
-            info = ydl.extract_info(url, download=False)
-            
-            # Filter and sort raw formats by quality (resolution, framerate, and filesize)
-            raw_formats = []
-            for f in info.get('formats', []):
-                # Skip audio-only formats and formats without video
-                vcodec = f.get('vcodec', '')
-                if vcodec == 'none' or vcodec == '' or not f.get('height'):
-                    continue
-                raw_formats.append(f)
-
-            # Sort raw formats so that best quality comes first (height desc, fps desc, filesize desc)
-            def get_sort_key(f):
-                h = f.get('height', 0) or 0
-                fps = f.get('fps', 30) or 30
-                size = f.get('filesize') or f.get('filesize_approx') or 0
-                return (h, fps, size)
-
-            raw_formats.sort(key=get_sort_key, reverse=True)
-
-            # Deduplicate by resolution + fps, keeping the highest quality version
-            formats = []
-            seen_resolutions = set()
-            for f in raw_formats:
-                height = f.get('height', 0)
-                fps = f.get('fps', 30) or 30
-                resolution = f"{height}p"
-                if fps > 30:
-                    resolution += f" {int(fps)}fps"
-                
-                resolution_key = f"{height}_{int(fps)}"
-                if resolution_key not in seen_resolutions:
-                    seen_resolutions.add(resolution_key)
-                    filesize = f.get('filesize') or f.get('filesize_approx') or 0
-                    formats.append({
-                        'format_id': f['format_id'],
-                        'resolution': resolution,
-                        'filesize_approx': filesize,
-                        'vcodec': f.get('vcodec', ''),
-                        'fps': fps,
-                    })
-            
-            # Get duration in seconds
-            duration = info.get('duration', 0)
-            
-            logger.info(f"Found {len(formats)} video formats for: {info.get('title', '')}")
-            
-            return {
-                'title': info.get('title', ''),
-                'thumbnail': info.get('thumbnail', ''),
-                'formats': formats,
-                'duration': duration
-            }
-            
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in get_video_info: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/download-video")
-def download_video(
-    url: str = Form(...),
-    format_id: str = Form(None),
-    audio_only: bool = Form(False),
-    format: str = Form("mp4")
-):
-    try:
-        # Clean up any existing downloads
-        for file in DOWNLOAD_DIR.glob("*"):
-            try:
-                file.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to delete {file}: {e}")
+def _download_video_sync(url: str, format_id: Optional[str], audio_only: bool, format_ext: str, task_id: str):
+    task_dir = DOWNLOAD_DIR / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
 
-        # Reset progress tracking
-        global download_progress
-        with progress_lock:
-            download_progress.update({
-                'status': 'starting',
-                'downloaded_bytes': 0,
-                'total_bytes': 0,
-                'speed': '0 B/s',
-                'eta': 'Calculating...',
-                'filename': '',
-                'progress': 0,
-                'downloaded': 0,
-                'total': 0,
-                'is_downloading': True,
-                'title': ''
-            })
+    progress_handler = TaskProgressHandler(task_id)
+    base_opts = build_base_ytdlp_opts(progress_hook=progress_handler.progress_hook)
+    base_opts['outtmpl'] = str(task_dir / '%(title)s.%(ext)s')
 
-        # Ensure download directory exists
-        DOWNLOAD_DIR.mkdir(exist_ok=True)
-        
-        # Create progress handler
-        progress = ProgressHandler()
-        
-        # Base options for faster downloads
-        base_opts = {
-            'outtmpl': str(DOWNLOAD_DIR / '%(title)s.%(ext)s'),
-            'quiet': False,
-            'no_warnings': False,
-            'extract_flat': False,
-            'concurrent_fragments': 3,
-            'progress_hooks': [progress.progress_hook],
-            'retries': 5,
-            'fragment_retries': 5,
-            'no_color': True,
-            'noprogress': True,
-            'noplaylist': True,
-            'no_check_certificates': True,
-            'restrictfilenames': True,  # Sanitize filenames for Windows compatibility
-            'windowsfilenames': True,   # Ensure Windows-safe filenames
+    if audio_only:
+        ydl_opts = {
+            **base_opts,
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '320',
+            }],
+            'updatetime': False,
+            'writeinfojson': False,
+            'writedescription': False,
+            'writethumbnail': False,
+            'writesubtitles': False,
+        }
+    else:
+        if format_id:
+            format_spec = f'{format_id}+bestaudio/best'
+        else:
+            format_spec = 'bestvideo+bestaudio/best'
+        ydl_opts = {
+            **base_opts,
+            'format': format_spec,
+            'merge_output_format': 'mp4',
         }
 
-        # Add cookie file only if it exists
-        # Use relative path to support both Docker and local development
-        base_dir = Path(__file__).resolve().parent
-        cookie_file = base_dir / 'cookies' / 'cookies.txt'
-        if cookie_file.exists():
-            base_opts['cookiefile'] = str(cookie_file)
-        
-        # Add cookies file if it exists
-        cookies_path = Path('/app/backend/cookies/cookies.txt')
-        if cookies_path.exists():
-            base_opts['cookiefile'] = str(cookies_path)
-        
-        # Configure yt-dlp options based on whether audio_only is selected
-        if audio_only:
-            ydl_opts = {
-                **base_opts,
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '320',
-                }],
-                # Skip unnecessary steps
-                'updatetime': False,
-                'writeinfojson': False,
-                'writedescription': False,
-                'writethumbnail': False,
-                'writesubtitles': False,
-            }
-            logger.info("Downloading audio only (MP3)")
-        else:
-            # For video, always include audio and use specific format
-            if format_id:
-                format_spec = f'{format_id}+bestaudio/best'
-            else:
-                format_spec = 'bestvideo+bestaudio/best'
-            
-            ydl_opts = {
-                **base_opts,
-                'format': format_spec,
-                'merge_output_format': 'mp4',
-            }
-            logger.info(f"Using format specification: {format_spec}")
-        
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract video info first
-            logger.info("Starting download process...")
+            logger.info(f"Task {task_id}: Downloading {url}")
             info = ydl.extract_info(url, download=True)
-            
             if not info:
-                raise HTTPException(status_code=400, detail="Failed to extract video information or video unavailable")
+                raise Exception("Failed to extract or download video")
 
-                        # Get the actual filename by finding the most recent file in downloads
             if audio_only:
-                # For audio-only, find the actual mp3 file
-                media_files = list(DOWNLOAD_DIR.glob('*.mp3'))
+                media_files = list(task_dir.glob('*.mp3'))
             else:
-                # For video, find mp4 or webm files
-                media_files = list(DOWNLOAD_DIR.glob('*.mp4')) + list(DOWNLOAD_DIR.glob('*.webm'))
-            
+                media_files = list(task_dir.glob('*.mp4')) + list(task_dir.glob('*.webm')) + list(task_dir.glob('*.mkv'))
+
             if media_files:
-                # Get the most recently modified file
                 final_file = max(media_files, key=lambda p: p.stat().st_mtime)
                 final_filename = final_file.name
-                logger.info(f"Found downloaded file: {final_filename}")
             else:
-                # Fallback: use prepare_filename
-                filename = ydl.prepare_filename(info)
-                if audio_only:
-                    final_filename = Path(filename).with_suffix('.mp3').name
-                else:
-                    final_filename = Path(filename).with_suffix('.mp4').name
-                logger.warning(f"No file found in downloads, using expected name: {final_filename}")
-            
+                raw_filename = ydl.prepare_filename(info)
+                final_filename = Path(raw_filename).with_suffix('.mp3' if audio_only else '.mp4').name
+
+            # Mark task finished
+            with active_downloads_lock:
+                if task_id in active_downloads:
+                    active_downloads[task_id].update({
+                        'status': 'finished',
+                        'progress': 100,
+                        'is_downloading': False,
+                        'filename': final_filename,
+                        'download_path': final_filename
+                    })
+
             return {
+                "task_id": task_id,
                 "title": info.get("title"),
                 "duration": info.get("duration"),
                 "thumbnail": info.get("thumbnail"),
                 "download_path": final_filename
             }
     except Exception as e:
+        with active_downloads_lock:
+            if task_id in active_downloads:
+                active_downloads[task_id].update({
+                    'status': 'error',
+                    'error': str(e),
+                    'is_downloading': False
+                })
+        err_msg = str(e)
+        if "name resolution" in err_msg.lower() or "errno -3" in err_msg.lower():
+            raise HTTPException(
+                status_code=502,
+                detail="DNS Resolution failed inside container. Check network and DNS settings."
+            )
+        raise
+
+@app.post("/api/download-video")
+async def download_video(
+    url: str = Form(...),
+    format_id: str = Form(None),
+    audio_only: bool = Form(False),
+    format: str = Form("mp4"),
+    task_id: Optional[str] = Form(None)
+):
+    try:
+        tid = task_id or uuid.uuid4().hex[:12]
+        with active_downloads_lock:
+            active_downloads[tid] = {
+                'task_id': tid,
+                'status': 'starting',
+                'progress': 0,
+                'downloaded': 0,
+                'total': 0,
+                'speed': '0 B/s',
+                'eta': 'Calculating...',
+                'is_downloading': True,
+                'title': '',
+                'updated_at': time.time()
+            }
+
+        result = await run_in_threadpool(
+            _download_video_sync,
+            url,
+            format_id,
+            audio_only,
+            format,
+            tid
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
         logger.error(f"Error in download_video: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/download/{filename}")
+@app.post("/api/convert-audio")
+async def convert_audio(
+    file: UploadFile = File(...),
+    output_format: str = Form("mp3"),
+    bitrate: str = Form("320k")
+):
+    """Extract or convert audio from uploaded audio/video files using FFmpeg."""
+    try:
+        safe_fmt = output_format.lower().strip().replace(".", "")
+        if safe_fmt not in ["mp3", "wav", "aac", "flac", "ogg", "m4a"]:
+            safe_fmt = "mp3"
+
+        file_id = uuid.uuid4().hex[:8]
+        src_path = UPLOAD_DIR / f"audio_src_{file_id}_{file.filename}"
+        with open(src_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        out_stem = Path(file.filename).stem
+        out_filename = f"converted_{out_stem}_{file_id}.{safe_fmt}"
+        out_path = OUTPUT_DIR / out_filename
+
+        def _ffmpeg_process():
+            cmd = [
+                "ffmpeg", "-y", "-i", str(src_path),
+                "-vn", "-b:a", bitrate, str(out_path)
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode != 0:
+                logger.error(f"FFmpeg failed: {res.stderr.decode('utf-8', errors='ignore')}")
+                raise Exception("Audio conversion failed")
+
+        await run_in_threadpool(_ffmpeg_process)
+
+        try:
+            if src_path.exists():
+                src_path.unlink()
+        except Exception as ex:
+            logger.warning(f"Failed to remove temp audio source: {ex}")
+
+        return {
+            "message": "Audio converted successfully",
+            "filename": out_filename,
+            "url": f"/api/download/{out_filename}"
+        }
+    except Exception as e:
+        logger.error(f"Error in convert_audio: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/download/{filename:path}")
 async def download_file(filename: str):
     try:
-        # Try both output and download directories
-        output_path = OUTPUT_DIR / filename
-        download_path = DOWNLOAD_DIR / filename
-        
-        # Check outputs directory first (for image processing results)
-        if output_path.exists():
-            logger.info(f"Found file in outputs directory: {output_path}")
-            return FileResponse(
-                path=output_path,
-                filename=filename,
-                media_type='application/octet-stream'
-            )
-        
-        # Then check downloads directory (for video downloads)
-        if download_path.exists():
-            logger.info(f"Found file in downloads directory: {download_path}")
-            return FileResponse(
-                path=download_path,
-                filename=filename,
-                media_type='application/octet-stream'
-            )
-        
-        # If file not found in either directory
-        logger.error(f"File not found in either directory: {filename}")
-        logger.error(f"Checked paths:\n- {output_path}\n- {download_path}")
+        # Sanitize path to prevent directory traversal
+        clean_name = Path(filename).name
+
+        # 1. Check in OUTPUT_DIR
+        out_direct = OUTPUT_DIR / clean_name
+        if out_direct.exists() and out_direct.is_file():
+            return FileResponse(path=out_direct, filename=clean_name, media_type='application/octet-stream')
+
+        # 2. Check in root DOWNLOAD_DIR
+        dl_direct = DOWNLOAD_DIR / clean_name
+        if dl_direct.exists() and dl_direct.is_file():
+            return FileResponse(path=dl_direct, filename=clean_name, media_type='application/octet-stream')
+
+        # 3. Check within any task subdirectory in DOWNLOAD_DIR
+        matches = list(DOWNLOAD_DIR.glob(f"*/{clean_name}"))
+        if matches:
+            latest_match = max(matches, key=lambda p: p.stat().st_mtime)
+            return FileResponse(path=latest_match, filename=clean_name, media_type='application/octet-stream')
+
+        # 4. Search recursively if exact name match wasn't found immediately
+        all_matches = list(DOWNLOAD_DIR.rglob(clean_name)) + list(OUTPUT_DIR.rglob(clean_name))
+        if all_matches:
+            return FileResponse(path=all_matches[0], filename=clean_name, media_type='application/octet-stream')
+
+        logger.error(f"File not found: {filename}")
         raise HTTPException(status_code=404, detail="File not found")
-        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -736,23 +845,36 @@ async def download_file(filename: str):
 MAX_AGE_SECONDS = 3600 * 24 # 24 hours
 
 async def cleanup_old_files():
-    """Background task to delete files older than 24 hours."""
+    """Background task to delete files and task directories older than 24 hours."""
     while True:
         now = time.time()
         for directory in [UPLOAD_DIR, OUTPUT_DIR, DOWNLOAD_DIR]:
             if not directory.exists():
                 continue
-            for file_path in directory.glob("*"):
-                if file_path.is_file() and file_path.name != "cookies.txt":
-                    try:
-                        # Check if file is older than MAX_AGE_SECONDS
-                        if now - file_path.stat().st_mtime > MAX_AGE_SECONDS:
-                            file_path.unlink()
-                            logger.info(f"Cleaned up old file: {file_path}")
-                    except Exception as e:
-                        logger.error(f"Failed to delete old file {file_path}: {e}")
-        
-        # Sleep for an hour before checking again
+            for path in directory.glob("*"):
+                if path.name == "cookies.txt":
+                    continue
+                try:
+                    if path.is_file():
+                        if now - path.stat().st_mtime > MAX_AGE_SECONDS:
+                            path.unlink()
+                            logger.info(f"Cleaned up old file: {path}")
+                    elif path.is_dir():
+                        if now - path.stat().st_mtime > MAX_AGE_SECONDS:
+                            shutil.rmtree(path, ignore_errors=True)
+                            logger.info(f"Cleaned up old task directory: {path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete {path}: {e}")
+
+        # Also purge in-memory task metadata older than 2 hours
+        with active_downloads_lock:
+            expired_tasks = [
+                tid for tid, data in active_downloads.items()
+                if now - data.get('updated_at', 0) > 7200
+            ]
+            for tid in expired_tasks:
+                active_downloads.pop(tid, None)
+
         await asyncio.sleep(3600)
 
 @app.on_event("startup")

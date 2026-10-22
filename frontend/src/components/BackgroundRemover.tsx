@@ -1,280 +1,218 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState } from "react"
+import axios from "axios"
+import confetti from "canvas-confetti"
 import {
-  Button,
-  VStack,
-  Text,
-  Box,
-  useToast,
-  Progress,
-  SimpleGrid,
-  Image,
-  IconButton,
-  HStack,
-  useColorModeValue,
-} from '@chakra-ui/react'
-import { useDropzone } from 'react-dropzone'
-import axios from 'axios'
-import { CloseIcon, DownloadIcon } from '@chakra-ui/icons'
-import { API_URL } from '../config'
+  Sparkles,
+  Download,
+  Trash2,
+  RefreshCw,
+  CheckCircle2,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
+import { FileUpload } from "@/components/ui/file-upload"
+import { ImageComparisonSlider } from "@/components/ui/image-comparison-slider"
+import { API_URL } from "../config"
 
 interface ProcessedFile {
   filename: string
   url: string
 }
 
-const FilePreview = ({ file }: { file: File }) => {
-  const [url, setUrl] = useState<string>('')
-  
-  useEffect(() => {
-    const objectUrl = URL.createObjectURL(file)
-    setUrl(objectUrl)
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [file])
-
-  return (
-    <Image 
-      src={url} 
-      alt={file.name} 
-      objectFit="cover" 
-      h="120px" 
-      w="full" 
-      borderRadius="md" 
-      mb={2}
-      bg="gray.100"
-    />
-  )
-}
-
-const BackgroundRemover = () => {
+const BackgroundRemover: React.FC = () => {
   const [files, setFiles] = useState<File[]>([])
   const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
-  const toast = useToast()
-
-  const borderColor = useColorModeValue('gray.200', 'gray.600')
-  const hoverBorderColor = useColorModeValue('blue.500', 'blue.300')
-  const bgColor = useColorModeValue('gray.50', 'gray.700')
-  const boxBg = useColorModeValue('white', 'gray.800')
-
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    setFiles(prev => [...prev, ...acceptedFiles])
-  }, [])
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg']
-    },
-  })
-
-  const removeFile = (index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index))
-  }
+  const [activePreviewIndex, setActivePreviewIndex] = useState(0)
 
   const handleRemoveBackground = async () => {
     if (files.length === 0) return
-
-    setIsLoading(true)
+    setIsProcessing(true)
     setProgress(0)
+
     try {
       const formData = new FormData()
-      files.forEach(file => {
-        formData.append('files', file)
+      files.forEach((file) => {
+        formData.append("files", file)
       })
 
-      const response = await axios.post(`${API_URL}/api/remove-background`, formData, {
+      const res = await axios.post(`${API_URL}/api/remove-background`, formData, {
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            )
             setProgress(percentCompleted)
           }
-        }
+        },
       })
-      
-      if (!response.data || !response.data.files) {
-        throw new Error('Invalid response format')
-      }
 
-      setProcessedFiles(response.data.files)
-      
-      toast({
-        title: 'Success',
-        description: 'Background removed successfully',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      })
-    } catch (error) {
-      console.error('Background removal error:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to remove background',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      })
-      setProcessedFiles([])  // Reset on error
+      if (res.data?.files) {
+        setProcessedFiles(res.data.files)
+        setActivePreviewIndex(0)
+        confetti({
+          particleCount: 80,
+          spread: 70,
+          origin: { y: 0.6 },
+        })
+      }
+    } catch (err) {
+      console.error("Background removal error:", err)
     } finally {
-      setIsLoading(false)
-      setProgress(100)
+      setIsProcessing(false)
     }
   }
 
-  const downloadFile = async (file: ProcessedFile) => {
-    try {
-      const response = await axios.get(`${API_URL}${file.url}`, {
-        responseType: 'blob'
-      })
-      
-      const blob = new Blob([response.data])
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = file.filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('Download error:', error)
-      toast({
-        title: 'Error',
-        description: 'Failed to download file',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      })
-    }
+  const downloadFile = (url: string, filename: string) => {
+    const link = document.createElement("a")
+    link.href = `${API_URL}${url}`
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
   return (
-    <VStack spacing={6} align="stretch">
-      <Box
-        {...getRootProps()}
-        p={8}
-        border="2px dashed"
-        borderColor={isDragActive ? hoverBorderColor : borderColor}
-        borderRadius="xl"
-        bg={bgColor}
-        transition="all 0.2s"
-        _hover={{ borderColor: hoverBorderColor }}
-        cursor="pointer"
-      >
-        <input {...getInputProps()} />
-        <VStack spacing={2}>
-          <Text fontSize="lg" fontWeight="medium">
-            {isDragActive
-              ? "Drop the images here"
-              : "Drag 'n' drop images here, or click to select"}
-          </Text>
-          <Text fontSize="sm" color="gray.500">
-            Supports PNG, JPG, JPEG
-          </Text>
-        </VStack>
-      </Box>
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Upload Zone */}
+      <Card className="border-red-500/20 shadow-xl">
+        <CardContent className="p-6 sm:p-8 space-y-6">
+          <FileUpload
+            files={files}
+            onChange={(newFiles) => setFiles(newFiles)}
+            onRemove={(idx) => {
+              setFiles((prev) => prev.filter((_, i) => i !== idx))
+              setProcessedFiles([])
+            }}
+            accept={{ "image/*": [".png", ".jpg", ".jpeg", ".webp"] }}
+            title="Upload Images for AI Background Removal"
+            description="Supports PNG, JPG, JPEG, and WebP (up to 20 files at once)"
+          />
 
-      {files.length > 0 && (
-        <Box>
-          <Text fontWeight="medium" mb={2}>Selected Files:</Text>
-          <SimpleGrid columns={[1, 2, 3]} spacing={4}>
-            {files.map((file, index) => (
-              <Box
-                key={index}
-                p={2}
-                borderWidth={1}
-                borderRadius="md"
-                bg={boxBg}
-                position="relative"
+          <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-zinc-200/60 dark:border-zinc-800/60">
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <Sparkles className="w-4 h-4 text-red-500" />
+              <span>Powered by high-precision ONNX AI engine</span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {files.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setFiles([])
+                    setProcessedFiles([])
+                  }}
+                  className="gap-1.5 text-xs text-zinc-600 dark:text-zinc-400"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Clear All
+                </Button>
+              )}
+
+              <Button
+                onClick={handleRemoveBackground}
+                disabled={files.length === 0 || isProcessing}
+                variant="gradient"
+                className="font-bold gap-2"
+                size="lg"
               >
-                <IconButton
-                  aria-label="Remove file"
-                  icon={<CloseIcon />}
-                  size="sm"
-                  position="absolute"
-                  top={1}
-                  right={1}
-                  onClick={() => removeFile(index)}
-                  zIndex={1}
-                  colorScheme="red"
-                  variant="solid"
-                />
-                <FilePreview file={file} />
-                <Text noOfLines={1} fontSize="sm">{file.name}</Text>
-              </Box>
-            ))}
-          </SimpleGrid>
-          <Button
-            colorScheme="blue"
-            mt={4}
-            onClick={handleRemoveBackground}
-            isLoading={isLoading}
-            width="full"
-          >
-            Remove Background from {files.length} {files.length === 1 ? 'Image' : 'Images'}
-          </Button>
-        </Box>
-      )}
+                {isProcessing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Processing {files.length} {files.length === 1 ? "Image" : "Images"}...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Remove Background ({files.length})
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
 
-      {isLoading && (
-        <Box borderWidth={1} borderRadius="lg" p={4} bg={boxBg}>
-          <VStack spacing={2}>
-            <Text fontWeight="medium">Processing Images...</Text>
-            <Progress
-              value={progress}
-              size="sm"
-              width="100%"
-              colorScheme="blue"
-              borderRadius="full"
-              bg={useColorModeValue('gray.100', 'gray.700')}
+          {isProcessing && (
+            <div className="space-y-2 pt-2">
+              <div className="flex justify-between text-xs font-semibold text-zinc-500">
+                <span>Uploading & Processing...</span>
+                <span>{progress}%</span>
+              </div>
+              <Progress value={progress} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Interactive Before / After Comparison */}
+      {processedFiles.length > 0 && files[activePreviewIndex] && (
+        <Card className="border-red-500/30 overflow-hidden shadow-2xl">
+          <CardContent className="p-6 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                  Interactive Before / After Comparison
+                </h3>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Drag the slider handle to inspect cutout details
+                </p>
+              </div>
+
+              <Button
+                onClick={() =>
+                  downloadFile(
+                    processedFiles[activePreviewIndex].url,
+                    processedFiles[activePreviewIndex].filename
+                  )
+                }
+                className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20"
+              >
+                <Download className="w-4 h-4" />
+                Download Cutout (PNG)
+              </Button>
+            </div>
+
+            <ImageComparisonSlider
+              originalImage={URL.createObjectURL(files[activePreviewIndex])}
+              processedImage={`${API_URL}${processedFiles[activePreviewIndex].url}`}
             />
-            <Text fontSize="sm">{progress}% Complete</Text>
-          </VStack>
-        </Box>
-      )}
 
-      {processedFiles && processedFiles.length > 0 && (
-        <Box>
-          <Text fontWeight="medium" mb={2}>Processed Images:</Text>
-          <SimpleGrid columns={[1, 2]} spacing={4}>
-            {processedFiles.map((file, index) => (
-              <Box
-                key={index}
-                p={4}
-                borderWidth={1}
-                borderRadius="md"
-                bg={boxBg}
-              >
-                <VStack spacing={4}>
-                  <Image
-                    src={`${API_URL}${file.url}`}
-                    alt={file.filename}
-                    h="200px"
-                    w="full"
-                    objectFit="contain"
-                    borderRadius="md"
-                    sx={{
-                      backgroundImage: 'repeating-linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc), repeating-linear-gradient(45deg, #ccc 25%, #fff 25%, #fff 75%, #ccc 75%, #ccc)',
-                      backgroundPosition: '0 0, 10px 10px',
-                      backgroundSize: '20px 20px',
-                    }}
-                  />
-                  <HStack width="full" justify="space-between">
-                    <Text noOfLines={1} flex={1}>{file.filename}</Text>
-                    <IconButton
-                      aria-label="Download"
-                      icon={<DownloadIcon />}
-                      onClick={() => downloadFile(file)}
-                      colorScheme="green"
-                    />
-                  </HStack>
-                </VStack>
-              </Box>
-            ))}
-          </SimpleGrid>
-        </Box>
+            {/* Thumbnail selector for batch cutouts */}
+            {processedFiles.length > 1 && (
+              <div className="space-y-2 pt-2">
+                <p className="text-xs font-bold text-zinc-600 dark:text-zinc-400">
+                  Select image to compare ({activePreviewIndex + 1} of{" "}
+                  {processedFiles.length}):
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {processedFiles.map((proc, idx) => (
+                    <button
+                      key={proc.filename}
+                      type="button"
+                      onClick={() => setActivePreviewIndex(idx)}
+                      className={`relative w-16 h-16 rounded-xl overflow-hidden border-2 transition-all ${
+                        activePreviewIndex === idx
+                          ? "border-red-600 scale-105 shadow-md"
+                          : "border-zinc-200 dark:border-zinc-700 opacity-60 hover:opacity-100"
+                      }`}
+                    >
+                      <img
+                        src={`${API_URL}${proc.url}`}
+                        alt={proc.filename}
+                        className="w-full h-full object-cover bg-checkerboard"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
-    </VStack>
+    </div>
   )
 }
 
