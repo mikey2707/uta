@@ -1,64 +1,68 @@
 # Stage 1: Build frontend
-FROM node:20-slim as frontend-builder
+FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy only package files first
+# Copy package files first to leverage Docker layer caching
 COPY frontend/package.json frontend/package-lock.json ./
 
 # Clean install dependencies
 RUN npm ci
 
-# Now copy the rest of the frontend files
+# Copy the rest of the frontend source
 COPY frontend/ ./
 
-# Set environment for build
+# Build production bundle
 ENV NODE_ENV=production
-
-# Build without TypeScript checks first
 RUN npm run build
 
-# Stage 2: Final image
+# Stage 2: Final runtime image
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies and Node.js
+# Install system dependencies
+# - ffmpeg: audio and video transcoding
+# - libgl1 & libglib2.0-0: OpenCV / ONNX image processing dependencies
+# - curl & ca-certificates: healthchecks and secure HTTPS requests
+# - nodejs: Node.js JavaScript runtime required by yt-dlp challenge solvers
+# - serve: lightweight production HTTP server for the React frontend
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
     curl \
+    ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g serve \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories
+# Create persistent storage directories
 RUN mkdir -p /app/backend/uploads /app/backend/outputs /app/backend/downloads /app/backend/cookies
 
-# Create cookies file
-RUN echo "# Netscape HTTP Cookie File\n\
-.youtube.com\tTRUE\t/\tFALSE\t2597573600\tCONSENT\tYES+cb\n\
-.youtube.com\tTRUE\t/\tFALSE\t2597573600\tVISITOR_INFO1_LIVE\tyes" > /app/backend/cookies/cookies.txt
+# Copy Python requirements first to leverage Docker layer caching
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
-# Copy backend files
-COPY backend/ backend/
+# Copy backend application source
+COPY backend/ /app/backend/
 
-# Install Python dependencies
-RUN cd backend && pip install --no-cache-dir -r requirements.txt
+# Copy built frontend assets from builder stage
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
-# Copy built frontend from previous stage
-COPY --from=frontend-builder /app/frontend/dist frontend/dist
+# Copy entrypoint script and ensure execution permissions
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
-# Expose ports
+# Expose ports: 8000 (Backend API), 3000 (Frontend Web App)
 EXPOSE 8000 3000
 
-# Copy and set up start script
-COPY start.sh .
-RUN chmod +x start.sh
+# Container healthcheck against backend API
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD curl -f http://localhost:8000/ || exit 1
 
-# Start the services
-CMD ["./start.sh"]
+# Start services
+CMD ["/app/start.sh"]
