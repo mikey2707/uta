@@ -117,13 +117,71 @@ def test_video_info_extraction():
     data = response.json()
     assert "title" in data
     assert "formats" in data
-    assert len(data["formats"]) > 0
+    assert len(data["formats"]) >= 5, f"Expected multiple qualities, got {len(data['formats'])}"
     assert data["duration"] > 0
     assert "thumbnail" in data
-    print(f"\nExtracted Title: {data['title']} (Duration: {data['duration']}s)")
+    resolutions = [f["resolution"] for f in data["formats"]]
+    print(f"\nExtracted Title: {data['title']}")
+    print(f"Available Qualities: {resolutions}")
+    # Verify both HD and SD qualities exist
+    assert any("720p" in r or "1080p" in r for r in resolutions)
+    assert any("360p" in r or "480p" in r for r in resolutions)
+
+def test_random_youtube_video_qualities_and_download():
+    """Unit test with a second random YouTube video: checks all qualities, downloads a video format, and tests auto-cleanup."""
+    RANDOM_VIDEO_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+    
+    # 1. Extract video metadata
+    info_resp = client.post("/api/get-video-info", data={"url": RANDOM_VIDEO_URL})
+    assert info_resp.status_code == 200
+    info_data = info_resp.json()
+    assert len(info_data["formats"]) >= 5
+    resolutions = [f["resolution"] for f in info_data["formats"]]
+    print(f"\nRandom Video: {info_data['title']}")
+    print(f"Random Video Qualities: {resolutions}")
+
+    # Pick a lightweight resolution for fast test download (e.g. 144p or lowest)
+    lowest_fmt = info_data["formats"][-1]
+    task_id = "test-rand-video-1"
+
+    # 2. Start download
+    dl_resp = client.post("/api/download-video", data={
+        "url": RANDOM_VIDEO_URL,
+        "format_id": lowest_fmt["format_id"],
+        "audio_only": "false",
+        "format": "mp4",
+        "task_id": task_id,
+        "target_resolution": lowest_fmt["resolution"]
+    })
+    assert dl_resp.status_code == 200
+    dl_data = dl_resp.json()
+    assert "download_path" in dl_data
+    download_filename = dl_data["download_path"]
+    assert download_filename.endswith(".mp4")
+
+    # 3. Check progress endpoint
+    prog_resp = client.get(f"/api/download-progress/{task_id}")
+    assert prog_resp.status_code == 200
+    prog_data = prog_resp.json()
+    assert prog_data["progress"] == 100
+    assert prog_data["status"] == "finished"
+    assert "phase" in prog_data
+
+    # 4. Fetch the file via /api/download and verify auto-cleanup
+    fetch_resp = client.get(f"/api/download/{download_filename}?task_id={task_id}")
+    assert fetch_resp.status_code == 200
+    assert len(fetch_resp.content) > 0
+
+    # Wait for the background deletion thread (2.5s grace period)
+    import time
+    time.sleep(3.5)
+    
+    # Verify the file was removed from server storage
+    after_resp = client.get(f"/api/download/{download_filename}?task_id={task_id}")
+    assert after_resp.status_code == 404, "Expected file to be deleted from server after download"
 
 def test_video_download_audio_only():
-    """Unit test for Video Downloader: Download Audio MP3 with user video link."""
+    """Unit test for Video Downloader: Download Audio MP3 with user video link and verify cleanup."""
     task_id = "test-dl-audio-1"
     response = client.post("/api/download-video", data={
         "url": TEST_VIDEO_URL,
@@ -138,13 +196,18 @@ def test_video_download_audio_only():
     print(f"\nDownloaded Audio File: {data['download_path']}")
 
     # Verify download route works
-    dl_resp = client.get(f"/api/download/{data['download_path']}")
+    dl_resp = client.get(f"/api/download/{data['download_path']}?task_id={task_id}")
     assert dl_resp.status_code == 200
     assert len(dl_resp.content) > 0
 
+    # Wait for background cleanup
+    import time
+    time.sleep(3.5)
+    clean_check = client.get(f"/api/download/{data['download_path']}?task_id={task_id}")
+    assert clean_check.status_code == 404
+
 def test_audio_converter_tool():
-    """Unit test for Audio Converter Tool."""
-    # Create a small valid WAV in-memory using python wave
+    """Unit test for Audio Converter Tool (WAV to MP3 conversion and auto-cleanup)."""
     import wave
     buf = io.BytesIO()
     with wave.open(buf, 'wb') as wav_file:
@@ -172,3 +235,33 @@ def test_audio_converter_tool():
     dl_resp = client.get(f"/api/download/{res_json['filename']}")
     assert dl_resp.status_code == 200
     assert len(dl_resp.content) > 0
+
+    # Wait for background cleanup
+    import time
+    time.sleep(3.5)
+    clean_resp = client.get(f"/api/download/{res_json['filename']}")
+    assert clean_resp.status_code == 404
+
+def test_audio_converter_tool_multi_format():
+    """Unit test for Audio Converter Tool: converting to AAC and FLAC."""
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(44100)
+        wav_file.writeframes(b'\x00\x00' * 11025) # 0.25s
+    buf.seek(0)
+
+    for fmt in ['aac', 'flac']:
+        files = [('file', (f'sample.{fmt}', buf.getvalue(), 'audio/wav'))]
+        data = {'output_format': fmt, 'bitrate': '256k'}
+        resp = client.post("/api/convert-audio", files=files, data=data)
+        assert resp.status_code == 200
+        out_name = resp.json()["filename"]
+        assert out_name.endswith(f".{fmt}")
+        
+        # Download and verify
+        dl_resp = client.get(f"/api/download/{out_name}")
+        assert dl_resp.status_code == 200
+        assert len(dl_resp.content) > 0

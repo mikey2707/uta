@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 import uvicorn
 import os
 import uuid
@@ -10,6 +11,7 @@ from typing import Optional, List, Dict, Any
 import asyncio
 import time
 import shutil
+import threading
 import requests
 from urllib.parse import urljoin
 from PIL import Image, ImageFilter, ImageOps
@@ -451,8 +453,8 @@ def get_cookie_file() -> Optional[str]:
             return str(c)
     return None
 
-def build_base_ytdlp_opts(progress_hook=None) -> Dict[str, Any]:
-    """Common yt-dlp options configured with Node.js and mobile client fallbacks."""
+def build_base_ytdlp_opts(progress_hook=None, postprocessor_hook=None) -> Dict[str, Any]:
+    """Common yt-dlp options configured for maximum speed, Node.js challenge solving, and fallback clients."""
     opts: Dict[str, Any] = {
         'quiet': False,
         'no_warnings': False,
@@ -463,29 +465,32 @@ def build_base_ytdlp_opts(progress_hook=None) -> Dict[str, Any]:
         'no_check_certificates': True,
         'retries': 5,
         'fragment_retries': 5,
-        'concurrent_fragments': 3,
+        'concurrent_fragments': 5,      # High-speed parallel chunk downloads
+        'buffersize': 1024 * 1024,       # 1MB buffer for fast I/O
+        'prefer_ffmpeg': True,
         'restrictfilenames': True,
         'windowsfilenames': True,
         # Enable Node.js JS runtime for modern YouTube challenge solving
         'js_runtimes': {'node': {}},
-        # Extractor fallbacks (android & ios bypass common datacenter IP blocks)
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'web'],
-                'player_skip': ['configs', 'webpage'],
-            }
-        }
     }
     cookie_path = get_cookie_file()
     if cookie_path:
         opts['cookiefile'] = cookie_path
     if progress_hook:
         opts['progress_hooks'] = [progress_hook]
+    if postprocessor_hook:
+        opts['postprocessor_hooks'] = [postprocessor_hook]
     return opts
 
 class TaskProgressHandler:
-    def __init__(self, task_id: str):
+    def __init__(self, task_id: str, is_audio_only: bool = False, target_resolution: str = ""):
         self.task_id = task_id
+        self.is_audio_only = is_audio_only
+        self.target_resolution = target_resolution
+        self.current_stream = 0
+        self.stream_bytes: Dict[str, int] = {}
+        self.stream_totals: Dict[str, int] = {}
+        self.max_progress = 0.0
 
     def progress_hook(self, d: Dict[str, Any]):
         global download_progress
@@ -496,26 +501,73 @@ class TaskProgressHandler:
         eta = d.get('eta', 0)
         filename = d.get('filename', '')
 
-        progress_pct = 0.0
-        if total and total > 0:
-            progress_pct = round((downloaded / total) * 100, 1)
+        stream_key = f"stream_{self.current_stream}"
+        self.stream_bytes[stream_key] = downloaded
+        if total:
+            self.stream_totals[stream_key] = total
+
+        # Calculate phase and normalized progress
+        if self.is_audio_only:
+            # Audio-only: 0 to 90% downloading, 90 to 100% converting
+            if total > 0:
+                raw_pct = (downloaded / total) * 90.0
+            else:
+                raw_pct = 0.0
+            phase_msg = "Downloading audio stream..."
+        else:
+            if self.current_stream == 0:
+                # Video stream: 0 to 80%
+                if total > 0:
+                    raw_pct = (downloaded / total) * 80.0
+                else:
+                    raw_pct = 0.0
+                res_info = f" ({self.target_resolution})" if self.target_resolution else ""
+                phase_msg = f"Downloading video stream{res_info}..."
+            else:
+                # Audio stream: 80% to 95%
+                if total > 0:
+                    raw_pct = 80.0 + ((downloaded / total) * 15.0)
+                else:
+                    raw_pct = 80.0
+                phase_msg = "Downloading audio track..."
+
+        if status == 'finished':
+            self.current_stream += 1
+            if self.is_audio_only:
+                raw_pct = 90.0
+                phase_msg = "Extracting MP3 audio..."
+            else:
+                if self.current_stream == 1:
+                    raw_pct = 80.0
+                    phase_msg = "Downloading audio track..."
+                else:
+                    raw_pct = 95.0
+                    phase_msg = "Merging video & audio..."
+
+        self.max_progress = max(self.max_progress, min(raw_pct, 98.0))
+        progress_pct = round(self.max_progress, 1)
 
         speed_str = format_speed(speed)
         eta_str = format_eta(eta) if eta is not None else "Calculating..."
         title_val = Path(filename).name if filename else ''
 
+        total_downloaded = sum(self.stream_bytes.values())
+        total_estimate = sum(self.stream_totals.values()) if self.stream_totals else total
+
         data = {
             'task_id': self.task_id,
             'status': status,
-            'downloaded_bytes': downloaded,
-            'total_bytes': total,
+            'phase': phase_msg,
+            'status_message': phase_msg,
+            'downloaded_bytes': total_downloaded,
+            'total_bytes': total_estimate,
             'speed': speed_str,
             'eta': eta_str,
             'filename': filename,
             'progress': progress_pct,
-            'downloaded': downloaded,
-            'total': total,
-            'is_downloading': (status == 'downloading'),
+            'downloaded': total_downloaded,
+            'total': total_estimate,
+            'is_downloading': True,
             'title': title_val,
             'updated_at': time.time()
         }
@@ -528,6 +580,29 @@ class TaskProgressHandler:
 
         with progress_lock:
             download_progress.update(data)
+
+    def postprocessor_hook(self, d: Dict[str, Any]):
+        pp_status = d.get('status', '')
+
+        if self.is_audio_only:
+            phase_msg = "Transcoding audio to 320kbps MP3..."
+        else:
+            phase_msg = "Merging video and audio into MP4..."
+
+        if pp_status == 'started':
+            self.max_progress = max(self.max_progress, 96.0)
+        elif pp_status == 'finished':
+            self.max_progress = max(self.max_progress, 99.0)
+
+        data = {
+            'phase': phase_msg,
+            'status_message': phase_msg,
+            'progress': round(self.max_progress, 1),
+            'updated_at': time.time()
+        }
+        with active_downloads_lock:
+            if self.task_id in active_downloads:
+                active_downloads[self.task_id].update(data)
 
 @app.get("/api/download-progress")
 async def get_download_progress():
@@ -547,6 +622,8 @@ async def get_task_download_progress(task_id: str):
     return {
         'task_id': task_id,
         'status': 'starting',
+        'phase': 'Starting download...',
+        'status_message': 'Starting download...',
         'progress': 0,
         'downloaded': 0,
         'total': 0,
@@ -584,47 +661,81 @@ async def get_video_info(url: str = Form(...)):
         if not info:
             raise HTTPException(status_code=400, detail="Could not retrieve video information")
 
-        raw_formats = []
-        for f in info.get('formats', []):
-            vcodec = f.get('vcodec', '')
-            if vcodec == 'none' or vcodec == '' or not f.get('height'):
-                continue
-            raw_formats.append(f)
+        formats = info.get('formats', [])
 
-        def get_sort_key(f):
-            h = f.get('height', 0) or 0
-            fps = f.get('fps', 30) or 30
-            size = f.get('filesize') or f.get('filesize_approx') or 0
-            return (h, fps, size)
+        # Find best audio stream size to add to video streams
+        audio_fmts = [f for f in formats if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
+        best_audio_size = 0
+        if audio_fmts:
+            best_a = max(audio_fmts, key=lambda f: f.get('abr') or f.get('tbr') or 0)
+            best_audio_size = best_a.get('filesize') or best_a.get('filesize_approx') or 0
 
-        raw_formats.sort(key=get_sort_key, reverse=True)
+        # Filter video formats
+        video_fmts = [
+            f for f in formats
+            if f.get('vcodec') != 'none'
+            and f.get('height')
+            and 'storyboard' not in f.get('format_note', '').lower()
+            and f.get('ext') != 'mhtml'
+        ]
 
-        formats = []
-        seen_resolutions = set()
-        for f in raw_formats:
-            height = f.get('height', 0)
-            fps = f.get('fps', 30) or 30
-            resolution = f"{height}p"
-            if fps > 30:
-                resolution += f" {int(fps)}fps"
+        # Group by (height, is_high_fps)
+        grouped: Dict[tuple, list] = {}
+        for f in video_fmts:
+            h = f.get('height')
+            fps = f.get('fps') or 30
+            is_60 = fps >= 50
+            key = (h, is_60)
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(f)
 
-            resolution_key = f"{height}_{int(fps)}"
-            if resolution_key not in seen_resolutions:
-                seen_resolutions.add(resolution_key)
-                filesize = f.get('filesize') or f.get('filesize_approx') or 0
-                formats.append({
-                    'format_id': f['format_id'],
-                    'resolution': resolution,
-                    'filesize_approx': filesize,
-                    'vcodec': f.get('vcodec', ''),
-                    'fps': fps,
-                })
+        quality_list = []
+        for (h, is_60), flist in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True):
+            def fmt_score(item):
+                vcodec = item.get('vcodec', '')
+                ext = item.get('ext', '')
+                size = item.get('filesize') or item.get('filesize_approx') or 0
+                proto = item.get('protocol', '')
+                score = 0
+                if size > 0: score += 50
+                if proto == 'https': score += 20
+                if 'avc' in vcodec: score += 10
+                elif 'vp9' in vcodec or 'vp09' in vcodec: score += 5
+                elif 'av01' in vcodec: score += 3
+                if ext == 'mp4': score += 2
+                return score
+
+            best_f = max(flist, key=fmt_score)
+            size = best_f.get('filesize') or best_f.get('filesize_approx') or 0
+            if size > 0 and best_f.get('acodec') == 'none':
+                size += best_audio_size
+
+            res_label = f"{h}p"
+            if h >= 2160: res_label = "4K (2160p)"
+            elif h >= 1440: res_label = "2K (1440p)"
+            elif h >= 1080: res_label = "1080p Full HD"
+            elif h >= 720: res_label = "720p HD"
+            elif h >= 480: res_label = "480p SD"
+
+            if is_60:
+                res_label += f" {int(best_f.get('fps') or 60)}fps"
+
+            quality_list.append({
+                'format_id': best_f['format_id'],
+                'height': h,
+                'fps': best_f.get('fps', 30),
+                'resolution': res_label,
+                'filesize_approx': size,
+                'ext': best_f.get('ext', 'mp4'),
+                'vcodec': best_f.get('vcodec', ''),
+            })
 
         return {
             'title': info.get('title', 'Unknown Title'),
             'thumbnail': info.get('thumbnail', ''),
             'uploader': info.get('uploader') or info.get('channel') or '',
-            'formats': formats,
+            'formats': quality_list,
             'duration': info.get('duration', 0)
         }
     except HTTPException:
@@ -633,12 +744,15 @@ async def get_video_info(url: str = Form(...)):
         logger.error(f"Error in get_video_info: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def _download_video_sync(url: str, format_id: Optional[str], audio_only: bool, format_ext: str, task_id: str):
+def _download_video_sync(url: str, format_id: Optional[str], audio_only: bool, format_ext: str, task_id: str, target_resolution: str = ""):
     task_dir = DOWNLOAD_DIR / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
 
-    progress_handler = TaskProgressHandler(task_id)
-    base_opts = build_base_ytdlp_opts(progress_hook=progress_handler.progress_hook)
+    progress_handler = TaskProgressHandler(task_id, is_audio_only=audio_only, target_resolution=target_resolution)
+    base_opts = build_base_ytdlp_opts(
+        progress_hook=progress_handler.progress_hook,
+        postprocessor_hook=progress_handler.postprocessor_hook
+    )
     base_opts['outtmpl'] = str(task_dir / '%(title)s.%(ext)s')
 
     if audio_only:
@@ -691,6 +805,8 @@ def _download_video_sync(url: str, format_id: Optional[str], audio_only: bool, f
                 if task_id in active_downloads:
                     active_downloads[task_id].update({
                         'status': 'finished',
+                        'phase': 'Download complete! File is ready.',
+                        'status_message': 'Download complete! File is ready.',
                         'progress': 100,
                         'is_downloading': False,
                         'filename': final_filename,
@@ -710,6 +826,8 @@ def _download_video_sync(url: str, format_id: Optional[str], audio_only: bool, f
                 active_downloads[task_id].update({
                     'status': 'error',
                     'error': str(e),
+                    'phase': f"Error: {str(e)}",
+                    'status_message': f"Error: {str(e)}",
                     'is_downloading': False
                 })
         err_msg = str(e)
@@ -726,7 +844,8 @@ async def download_video(
     format_id: str = Form(None),
     audio_only: bool = Form(False),
     format: str = Form("mp4"),
-    task_id: Optional[str] = Form(None)
+    task_id: Optional[str] = Form(None),
+    target_resolution: Optional[str] = Form("")
 ):
     try:
         tid = task_id or uuid.uuid4().hex[:12]
@@ -734,6 +853,8 @@ async def download_video(
             active_downloads[tid] = {
                 'task_id': tid,
                 'status': 'starting',
+                'phase': 'Initializing download...',
+                'status_message': 'Initializing download...',
                 'progress': 0,
                 'downloaded': 0,
                 'total': 0,
@@ -750,7 +871,8 @@ async def download_video(
             format_id,
             audio_only,
             format,
-            tid
+            tid,
+            target_resolution or ""
         )
         return result
     except HTTPException:
@@ -807,45 +929,90 @@ async def convert_audio(
         logger.error(f"Error in convert_audio: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def cleanup_after_transfer(path: Path, task_id: Optional[str] = None):
+    """Immediately remove file from server storage once client finishes downloading it."""
+    def _delayed_delete():
+        time.sleep(2.5)  # Short grace period for TCP socket completion
+        try:
+            if path.exists() and path.is_file():
+                path.unlink(missing_ok=True)
+                logger.info(f"Cleaned up transferred file from server: {path}")
+            if task_id:
+                task_dir = DOWNLOAD_DIR / task_id
+                if task_dir.exists() and task_dir.is_dir():
+                    shutil.rmtree(task_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up task directory: {task_dir}")
+            parent = path.parent
+            if parent != DOWNLOAD_DIR and parent != OUTPUT_DIR and parent.is_dir():
+                if not any(parent.iterdir()):
+                    shutil.rmtree(parent, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"Error in cleanup_after_transfer for {path}: {e}")
+
+    threading.Thread(target=_delayed_delete, daemon=True).start()
+
 @app.get("/api/download/{filename:path}")
-async def download_file(filename: str):
+async def download_file(filename: str, task_id: Optional[str] = None):
     try:
         # Sanitize path to prevent directory traversal
         clean_name = Path(filename).name
+        target_path: Optional[Path] = None
+        resolved_task_id = task_id
 
         # 1. Check in OUTPUT_DIR
         out_direct = OUTPUT_DIR / clean_name
         if out_direct.exists() and out_direct.is_file():
-            return FileResponse(path=out_direct, filename=clean_name, media_type='application/octet-stream')
+            target_path = out_direct
 
-        # 2. Check in root DOWNLOAD_DIR
-        dl_direct = DOWNLOAD_DIR / clean_name
-        if dl_direct.exists() and dl_direct.is_file():
-            return FileResponse(path=dl_direct, filename=clean_name, media_type='application/octet-stream')
+        # 2. Check in specific task subdirectory in DOWNLOAD_DIR
+        if not target_path and task_id:
+            task_specific = DOWNLOAD_DIR / task_id / clean_name
+            if task_specific.exists() and task_specific.is_file():
+                target_path = task_specific
 
-        # 3. Check within any task subdirectory in DOWNLOAD_DIR
-        matches = list(DOWNLOAD_DIR.glob(f"*/{clean_name}"))
-        if matches:
-            latest_match = max(matches, key=lambda p: p.stat().st_mtime)
-            return FileResponse(path=latest_match, filename=clean_name, media_type='application/octet-stream')
+        # 3. Check in root DOWNLOAD_DIR
+        if not target_path:
+            dl_direct = DOWNLOAD_DIR / clean_name
+            if dl_direct.exists() and dl_direct.is_file():
+                target_path = dl_direct
 
-        # 4. Search recursively if exact name match wasn't found immediately
-        all_matches = list(DOWNLOAD_DIR.rglob(clean_name)) + list(OUTPUT_DIR.rglob(clean_name))
-        if all_matches:
-            return FileResponse(path=all_matches[0], filename=clean_name, media_type='application/octet-stream')
+        # 4. Check within any task subdirectory in DOWNLOAD_DIR
+        if not target_path:
+            matches = list(DOWNLOAD_DIR.glob(f"*/{clean_name}"))
+            if matches:
+                target_path = max(matches, key=lambda p: p.stat().st_mtime)
+                resolved_task_id = target_path.parent.name
 
-        logger.error(f"File not found: {filename}")
-        raise HTTPException(status_code=404, detail="File not found")
+        # 5. Search recursively if exact name match wasn't found immediately
+        if not target_path:
+            all_matches = list(DOWNLOAD_DIR.rglob(clean_name)) + list(OUTPUT_DIR.rglob(clean_name))
+            if all_matches:
+                target_path = all_matches[0]
+                if target_path.parent != DOWNLOAD_DIR and target_path.parent != OUTPUT_DIR:
+                    resolved_task_id = target_path.parent.name
+
+        if not target_path:
+            logger.error(f"File not found: {filename}")
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Return file and schedule immediate server-side deletion after client download finishes
+        cleanup_task = BackgroundTask(cleanup_after_transfer, target_path, resolved_task_id)
+        return FileResponse(
+            path=target_path,
+            filename=clean_name,
+            media_type='application/octet-stream',
+            background=cleanup_task
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in download_file: {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-MAX_AGE_SECONDS = 3600 * 24 # 24 hours
+MAX_AGE_SECONDS = 1800 # 30 minutes for any abandoned/uncollected files
 
 async def cleanup_old_files():
-    """Background task to delete files and task directories older than 24 hours."""
+    """Background task to delete leftover files and task directories older than 30 minutes."""
     while True:
         now = time.time()
         for directory in [UPLOAD_DIR, OUTPUT_DIR, DOWNLOAD_DIR]:
@@ -866,16 +1033,16 @@ async def cleanup_old_files():
                 except Exception as e:
                     logger.error(f"Failed to delete {path}: {e}")
 
-        # Also purge in-memory task metadata older than 2 hours
+        # Also purge in-memory task metadata older than 30 minutes
         with active_downloads_lock:
             expired_tasks = [
                 tid for tid, data in active_downloads.items()
-                if now - data.get('updated_at', 0) > 7200
+                if now - data.get('updated_at', 0) > 1800
             ]
             for tid in expired_tasks:
                 active_downloads.pop(tid, None)
 
-        await asyncio.sleep(3600)
+        await asyncio.sleep(300)
 
 @app.on_event("startup")
 async def startup_event():

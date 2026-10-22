@@ -25,6 +25,8 @@ interface VideoFormat {
   filesize_approx: number
   vcodec: string
   fps: number
+  height?: number
+  ext?: string
 }
 
 interface VideoInfo {
@@ -38,6 +40,8 @@ interface VideoInfo {
 interface TaskProgress {
   task_id: string
   status: string
+  phase?: string
+  status_message?: string
   progress: number
   downloaded: number
   total: number
@@ -57,7 +61,9 @@ const VideoDownloader: React.FC = () => {
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
   const [currentTask, setCurrentTask] = useState<TaskProgress | null>(null)
   const [downloadReadyPath, setDownloadReadyPath] = useState<string | null>(null)
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [downloadSuccessNotice, setDownloadSuccessNotice] = useState<string | null>(null)
 
   const pollRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -85,6 +91,7 @@ const VideoDownloader: React.FC = () => {
     setErrorMessage(null)
     setVideoInfo(null)
     setDownloadReadyPath(null)
+    setDownloadSuccessNotice(null)
     setSelectedFormat("")
 
     try {
@@ -112,26 +119,49 @@ const VideoDownloader: React.FC = () => {
     }
   }
 
+  const triggerFileSave = (filename: string, taskId?: string | null) => {
+    try {
+      const qParam = taskId ? `?task_id=${encodeURIComponent(taskId)}` : ""
+      const downloadUrl = `${API_URL}/api/download/${encodeURIComponent(filename)}${qParam}`
+      const link = document.createElement("a")
+      link.href = downloadUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (e) {
+      console.error("Save file error:", e)
+    }
+  }
+
   const startDownload = async () => {
     if (!url.trim()) return
     setIsDownloading(true)
     setErrorMessage(null)
     setDownloadReadyPath(null)
+    setDownloadSuccessNotice(null)
 
     const taskId = Math.random().toString(36).substring(2, 12)
+    setActiveTaskId(taskId)
+
+    const selectedFmtObj = videoInfo?.formats.find((f) => f.format_id === selectedFormat)
+    const resLabel = selectedFmtObj?.resolution || ""
+
     setCurrentTask({
       task_id: taskId,
       status: "starting",
+      phase: isAudioOnly ? "Preparing audio download..." : `Preparing ${resLabel || "video"} download...`,
+      status_message: isAudioOnly ? "Preparing audio download..." : `Preparing ${resLabel || "video"} download...`,
       progress: 0,
       downloaded: 0,
-      total: 0,
+      total: selectedFmtObj?.filesize_approx || 0,
       speed: "0 B/s",
       eta: "Calculating...",
       is_downloading: true,
       title: videoInfo?.title || "",
     })
 
-    // Start progress polling
+    // Ultra-responsive progress polling (every 400ms)
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(async () => {
       try {
@@ -146,7 +176,7 @@ const VideoDownloader: React.FC = () => {
       } catch (e) {
         console.warn("Polling progress error:", e)
       }
-    }, 1000)
+    }, 400)
 
     try {
       const formData = new FormData()
@@ -158,16 +188,22 @@ const VideoDownloader: React.FC = () => {
       } else if (selectedFormat) {
         formData.append("format_id", selectedFormat)
         formData.append("format", "mp4")
+        formData.append("target_resolution", resLabel)
       }
 
       const res = await axios.post(`${API_URL}/api/download-video`, formData)
       if (res.data?.download_path) {
-        setDownloadReadyPath(res.data.download_path)
+        const dlPath = res.data.download_path
+        setDownloadReadyPath(dlPath)
+        setDownloadSuccessNotice("Your download has started and will be automatically saved to your computer. Server storage has been cleaned.")
         confetti({
           particleCount: 80,
           spread: 60,
           origin: { y: 0.7 },
         })
+
+        // Automatically trigger browser download to the user's computer
+        triggerFileSave(dlPath, taskId)
       }
     } catch (err: unknown) {
       console.error("Download error:", err)
@@ -182,25 +218,6 @@ const VideoDownloader: React.FC = () => {
         clearInterval(pollRef.current)
         pollRef.current = null
       }
-    }
-  }
-
-  const triggerFileSave = async (filename: string) => {
-    try {
-      const response = await axios.get(
-        `${API_URL}/api/download/${encodeURIComponent(filename)}`,
-        { responseType: "blob" }
-      )
-      const blobUrl = window.URL.createObjectURL(new Blob([response.data]))
-      const link = document.createElement("a")
-      link.href = blobUrl
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(blobUrl)
-    } catch (e) {
-      console.error("Save file error:", e)
     }
   }
 
@@ -274,7 +291,7 @@ const VideoDownloader: React.FC = () => {
                   Audio-Only Mode (MP3 320kbps)
                 </p>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Extract high quality audio without video
+                  Extract high quality audio without downloading video streams
                 </p>
               </div>
             </div>
@@ -291,15 +308,26 @@ const VideoDownloader: React.FC = () => {
         <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
           <div className="text-sm space-y-1">
-            <p className="font-semibold">Unable to download video</p>
+            <p className="font-semibold">Unable to process video</p>
             <p className="text-xs opacity-90">{errorMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Success Notification Alert */}
+      {downloadSuccessNotice && (
+        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-start gap-3">
+          <Download className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm space-y-1">
+            <p className="font-semibold">Download Initiated!</p>
+            <p className="text-xs opacity-90">{downloadSuccessNotice}</p>
           </div>
         </div>
       )}
 
       {/* Video Details Card */}
       {videoInfo && (
-        <Card className="overflow-hidden border-zinc-200/80 dark:border-zinc-800/80">
+        <Card className="overflow-hidden border-zinc-200/80 dark:border-zinc-800/80 shadow-xl">
           <div className="flex flex-col md:flex-row gap-6 p-6">
             {videoInfo.thumbnail && (
               <div className="relative w-full md:w-72 h-44 rounded-xl overflow-hidden bg-black shrink-0 shadow-md">
@@ -329,14 +357,19 @@ const VideoDownloader: React.FC = () => {
                 )}
               </div>
 
-              {/* Format selection */}
+              {/* Format selection - SHOWS ALL AVAILABLE VIDEO QUALITIES */}
               {!isAudioOnly && videoInfo.formats?.length > 0 && (
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
-                    Select Video Quality
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {videoInfo.formats.slice(0, 8).map((fmt) => {
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
+                      Select Video Quality ({videoInfo.formats.length} Available)
+                    </label>
+                    <span className="text-[11px] text-zinc-400">
+                      Standard MP4 Container
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    {videoInfo.formats.map((fmt) => {
                       const isSelected = selectedFormat === fmt.format_id
                       return (
                         <button
@@ -344,17 +377,34 @@ const VideoDownloader: React.FC = () => {
                           type="button"
                           onClick={() => setSelectedFormat(fmt.format_id)}
                           className={cn(
-                            "px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border flex items-center gap-1.5",
+                            "px-3 py-2 rounded-xl text-xs font-semibold transition-all border flex flex-col items-start gap-1 text-left",
                             isSelected
-                              ? "bg-red-600 text-white border-red-600 shadow-md shadow-red-500/20 scale-105"
+                              ? "bg-red-600 text-white border-red-600 shadow-md shadow-red-500/25 scale-[1.02]"
                               : "bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-red-400"
                           )}
                         >
-                          <Film className="w-3 h-3" />
-                          <span>{fmt.resolution}</span>
+                          <div className="flex items-center gap-1.5 w-full justify-between">
+                            <span className="font-bold flex items-center gap-1">
+                              <Film className="w-3 h-3" />
+                              {fmt.resolution}
+                            </span>
+                            <span
+                              className={cn(
+                                "text-[10px] px-1 py-0.2 rounded font-mono font-bold uppercase",
+                                isSelected ? "bg-red-700 text-red-100" : "bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400"
+                              )}
+                            >
+                              MP4
+                            </span>
+                          </div>
                           {fmt.filesize_approx > 0 && (
-                            <span className="text-[10px] opacity-75 font-normal">
-                              ({formatBytes(fmt.filesize_approx)})
+                            <span
+                              className={cn(
+                                "text-[11px] font-normal",
+                                isSelected ? "text-red-100" : "text-zinc-500 dark:text-zinc-400"
+                              )}
+                            >
+                              ~{formatBytes(fmt.filesize_approx)}
                             </span>
                           )}
                         </button>
@@ -366,34 +416,35 @@ const VideoDownloader: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="pt-2 flex flex-wrap items-center gap-3">
-                {downloadReadyPath ? (
+                <Button
+                  onClick={startDownload}
+                  disabled={isDownloading}
+                  className="gap-2 font-bold"
+                  variant="gradient"
+                  size="lg"
+                >
+                  {isDownloading ? (
+                    <>
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                      Downloading Media...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-5 h-5" />
+                      Download {isAudioOnly ? "Audio (MP3)" : "Video (MP4)"}
+                    </>
+                  )}
+                </Button>
+
+                {downloadReadyPath && (
                   <Button
-                    onClick={() => triggerFileSave(downloadReadyPath)}
-                    className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20"
-                    size="lg"
+                    onClick={() => triggerFileSave(downloadReadyPath, activeTaskId)}
+                    className="gap-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold"
+                    size="sm"
+                    variant="outline"
                   >
-                    <Download className="w-5 h-5" />
-                    Save to Device ({downloadReadyPath})
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={startDownload}
-                    disabled={isDownloading}
-                    className="gap-2 font-bold"
-                    variant="gradient"
-                    size="lg"
-                  >
-                    {isDownloading ? (
-                      <>
-                        <RefreshCw className="w-5 h-5 animate-spin" />
-                        Downloading Media...
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-5 h-5" />
-                        Download {isAudioOnly ? "Audio (MP3)" : "Video (MP4)"}
-                      </>
-                    )}
+                    <Download className="w-4 h-4" />
+                    Download Again ({downloadReadyPath})
                   </Button>
                 )}
               </div>
@@ -404,16 +455,18 @@ const VideoDownloader: React.FC = () => {
 
       {/* Real-time Task Progress Box */}
       {isDownloading && currentTask && (
-        <Card className="border-red-500/30 bg-red-500/5">
+        <Card className="border-red-500/30 bg-red-500/5 shadow-xl">
           <CardContent className="p-6 space-y-4">
             <div className="flex items-center justify-between text-sm">
               <span className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
                 <RefreshCw className="w-4 h-4 text-red-500 animate-spin" />
-                {currentTask.status === "finished"
-                  ? "Download Complete! Preparing file..."
-                  : "Downloading fragments..."}
+                {currentTask.phase || currentTask.status_message || (
+                  currentTask.status === "finished"
+                    ? "Download Complete! Preparing file..."
+                    : "Downloading media fragments..."
+                )}
               </span>
-              <span className="font-mono font-bold text-red-600 dark:text-red-400">
+              <span className="font-mono font-bold text-red-600 dark:text-red-400 text-base">
                 {currentTask.progress}%
               </span>
             </div>
@@ -422,7 +475,7 @@ const VideoDownloader: React.FC = () => {
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 text-xs">
               <div>
-                <p className="text-zinc-400">Speed</p>
+                <p className="text-zinc-400">Download Speed</p>
                 <p className="font-semibold text-zinc-700 dark:text-zinc-300 mt-0.5">
                   {currentTask.speed || "0 B/s"}
                 </p>
@@ -440,7 +493,7 @@ const VideoDownloader: React.FC = () => {
                 </p>
               </div>
               <div>
-                <p className="text-zinc-400">Total Size</p>
+                <p className="text-zinc-400">Estimated Total</p>
                 <p className="font-semibold text-zinc-700 dark:text-zinc-300 mt-0.5">
                   {formatBytes(currentTask.total)}
                 </p>
