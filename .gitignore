@@ -25,6 +25,8 @@ downloads/*
 
 # Secrets
 backend/cookies/cookies.txt
+backend/cookies.txt
+**/cookies.txt
 
 # IDE
 .vscode/

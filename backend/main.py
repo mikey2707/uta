@@ -13,7 +13,10 @@ import time
 import shutil
 import threading
 import requests
-from urllib.parse import urljoin
+import ipaddress
+import re
+import socket
+from urllib.parse import urljoin, urlparse
 from PIL import Image, ImageFilter, ImageOps
 import yt_dlp
 import logging
@@ -36,19 +39,72 @@ app = FastAPI(title="Unified Tools API")
 
 
 # Configure CORS
+_extra_cors = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3010",
         "http://localhost:3000",
         "http://localhost:5173",
-        "http://10.0.0.201:3010",
         "https://tools.mikey.host",
+        *_extra_cors,
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def sanitize_filename(filename: Optional[str], fallback: str = "upload.bin") -> str:
+    """Strip directory components and dangerous characters to prevent path traversal."""
+    if not filename:
+        return fallback
+    name = Path(filename).name.strip()
+    name = re.sub(r'[\x00-\x1f/\\]', '_', name)
+    if name in ("", ".", ".."):
+        return fallback
+    return name
+
+def sanitize_task_id(task_id: Optional[str]) -> str:
+    """Ensure task_id contains only safe alphanumeric, dash, or underscore characters."""
+    if not task_id:
+        return uuid.uuid4().hex[:12]
+    cleaned = re.sub(r'[^a-zA-Z0-9_-]', '', task_id)[:64]
+    return cleaned or uuid.uuid4().hex[:12]
+
+def validate_external_media_url(raw_url: str) -> str:
+    """Validate that a media URL is public HTTP/HTTPS and does not target private/loopback SSRF hosts."""
+    if not raw_url or not isinstance(raw_url, str):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+    url = raw_url.strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Only valid http:// or https:// URLs are allowed")
+
+    hostname = parsed.hostname.lower().strip()
+    if hostname in ("localhost", "0.0.0.0") or hostname.endswith((".local", ".internal", ".lan", ".home")):
+        raise HTTPException(status_code=400, detail="Internal or local network URLs are not allowed")
+
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+        for item in addr_info:
+            ip_str = item[4][0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_multicast
+                or ip_obj.is_reserved
+                or ip_obj.is_unspecified
+            ):
+                raise HTTPException(status_code=400, detail="URLs resolving to private or internal IPs are not allowed")
+    except HTTPException:
+        raise
+    except socket.gaierror:
+        # Let yt-dlp handle external DNS failures naturally
+        pass
+
+    return url
 
 # Configure logging
 
@@ -65,7 +121,8 @@ def merge_pdfs(files: List[UploadFile] = File(...)):
         # Save uploaded files
         saved_files = []
         for file in files:
-            file_path = UPLOAD_DIR / file.filename
+            safe_name = sanitize_filename(file.filename, "document.pdf")
+            file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             saved_files.append(("fileInput", open(file_path, "rb")))
@@ -111,7 +168,8 @@ def split_pdf(
         raise HTTPException(status_code=501, detail="Stirling-PDF service not configured")
     try:
         # Save uploaded file
-        file_path = UPLOAD_DIR / file.filename
+        safe_name = sanitize_filename(file.filename, "document.pdf")
+        file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -133,7 +191,7 @@ def split_pdf(
             raise HTTPException(status_code=response.status_code, detail="Failed to split PDF")
 
         # Handle multiple output files (Stirling returns a zip file)
-        output_filename = f"split_{Path(file.filename).stem}.zip"
+        output_filename = f"split_{Path(safe_name).stem}.zip"
         output_path = OUTPUT_DIR / output_filename
         with open(output_path, "wb") as f:
             f.write(response.content)
@@ -167,7 +225,8 @@ def add_watermark(
         raise HTTPException(status_code=501, detail="Stirling-PDF service not configured")
     try:
         # Save uploaded PDF
-        pdf_path = UPLOAD_DIR / file.filename
+        safe_pdf_name = sanitize_filename(file.filename, "document.pdf")
+        pdf_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_pdf_name}"
         with open(pdf_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -189,7 +248,8 @@ def add_watermark(
             if not watermark_image:
                 raise HTTPException(status_code=400, detail="Watermark image is required")
             # Save watermark image
-            watermark_path = UPLOAD_DIR / watermark_image.filename
+            safe_wm_name = sanitize_filename(watermark_image.filename, "watermark.png")
+            watermark_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_wm_name}"
             with open(watermark_path, "wb") as buffer:
                 shutil.copyfileobj(watermark_image.file, buffer)
             files["watermarkImage"] = open(watermark_path, "rb")
@@ -205,7 +265,7 @@ def add_watermark(
             raise HTTPException(status_code=response.status_code, detail="Failed to add watermark")
 
         # Save the watermarked PDF
-        output_filename = f"watermarked_{Path(file.filename).stem}.pdf"
+        output_filename = f"watermarked_{Path(safe_pdf_name).stem}.pdf"
         output_path = OUTPUT_DIR / output_filename
         with open(output_path, "wb") as f:
             f.write(response.content)
@@ -281,7 +341,8 @@ async def remove_background_handler(files: List[UploadFile] = File(...)):
     try:
         output_files = []
         for file in files:
-            file_path = UPLOAD_DIR / file.filename
+            safe_name = sanitize_filename(file.filename, "image.png")
+            file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
             try:
                 # Save uploaded file
                 with open(file_path, "wb") as buffer:
@@ -297,7 +358,7 @@ async def remove_background_handler(files: List[UploadFile] = File(...)):
                         # Always save as PNG to preserve transparency
                         result.save(str(out_p), 'PNG', optimize=True)
 
-                output_filename = f"nobg_{Path(file.filename).stem}.png"
+                output_filename = f"nobg_{Path(safe_name).stem}.png"
                 output_path = OUTPUT_DIR / output_filename
                 
                 await run_in_threadpool(process_image, file_path, output_path)
@@ -336,7 +397,8 @@ async def convert_image(
         output_files = []
         
         for file in files:
-            file_path = UPLOAD_DIR / file.filename
+            safe_name = sanitize_filename(file.filename, "image.png")
+            file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
             try:
                 # Save uploaded file
                 with open(file_path, "wb") as buffer:
@@ -414,7 +476,8 @@ async def convert_image(
                         img.save(str(out_p), format=format_upper, **save_kwargs)
                         logger.info("Save completed")
 
-                output_filename = f"converted_{Path(file.filename).stem}.{format.lower()}"
+                safe_ext = re.sub(r'[^a-z0-9]', '', format.lower()) or 'png'
+                output_filename = f"converted_{Path(safe_name).stem}.{safe_ext}"
                 output_path = OUTPUT_DIR / output_filename
                 
                 await run_in_threadpool(process_conversion, file_path, output_path, format, width, height, quality, maintain_aspect_ratio, strip_metadata, filter_type, rotation)
@@ -657,7 +720,8 @@ def _extract_video_info_sync(url: str):
 @app.post("/api/get-video-info")
 async def get_video_info(url: str = Form(...)):
     try:
-        info = await run_in_threadpool(_extract_video_info_sync, url)
+        validated_url = validate_external_media_url(url)
+        info = await run_in_threadpool(_extract_video_info_sync, validated_url)
         if not info:
             raise HTTPException(status_code=400, detail="Could not retrieve video information")
 
@@ -848,7 +912,9 @@ async def download_video(
     target_resolution: Optional[str] = Form("")
 ):
     try:
-        tid = task_id or uuid.uuid4().hex[:12]
+        validated_url = validate_external_media_url(url)
+        safe_format_id = re.sub(r'[^a-zA-Z0-9._+-]', '', format_id)[:64] if format_id else None
+        tid = sanitize_task_id(task_id)
         with active_downloads_lock:
             active_downloads[tid] = {
                 'task_id': tid,
@@ -867,8 +933,8 @@ async def download_video(
 
         result = await run_in_threadpool(
             _download_video_sync,
-            url,
-            format_id,
+            validated_url,
+            safe_format_id,
             audio_only,
             format,
             tid,
@@ -893,19 +959,24 @@ async def convert_audio(
         if safe_fmt not in ["mp3", "wav", "aac", "flac", "ogg", "m4a"]:
             safe_fmt = "mp3"
 
+        safe_bitrate = bitrate.lower().strip()
+        if safe_bitrate not in ("64k", "96k", "128k", "160k", "192k", "256k", "320k"):
+            safe_bitrate = "320k"
+
+        safe_src_name = sanitize_filename(file.filename, "audio.wav")
         file_id = uuid.uuid4().hex[:8]
-        src_path = UPLOAD_DIR / f"audio_src_{file_id}_{file.filename}"
+        src_path = UPLOAD_DIR / f"audio_src_{file_id}_{safe_src_name}"
         with open(src_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        out_stem = Path(file.filename).stem
+        out_stem = Path(safe_src_name).stem
         out_filename = f"converted_{out_stem}_{file_id}.{safe_fmt}"
         out_path = OUTPUT_DIR / out_filename
 
         def _ffmpeg_process():
             cmd = [
                 "ffmpeg", "-y", "-i", str(src_path),
-                "-vn", "-b:a", bitrate, str(out_path)
+                "-vn", "-b:a", safe_bitrate, str(out_path)
             ]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if res.returncode != 0:
@@ -954,10 +1025,13 @@ def cleanup_after_transfer(path: Path, task_id: Optional[str] = None):
 @app.get("/api/download/{filename:path}")
 async def download_file(filename: str, task_id: Optional[str] = None):
     try:
-        # Sanitize path to prevent directory traversal
-        clean_name = Path(filename).name
+        # Sanitize path and task_id to prevent directory traversal
+        clean_name = sanitize_filename(filename, "")
+        if not clean_name:
+            raise HTTPException(status_code=404, detail="File not found")
+        safe_tid = sanitize_task_id(task_id) if task_id else None
         target_path: Optional[Path] = None
-        resolved_task_id = task_id
+        resolved_task_id = safe_tid
 
         # 1. Check in OUTPUT_DIR
         out_direct = OUTPUT_DIR / clean_name
@@ -965,8 +1039,8 @@ async def download_file(filename: str, task_id: Optional[str] = None):
             target_path = out_direct
 
         # 2. Check in specific task subdirectory in DOWNLOAD_DIR
-        if not target_path and task_id:
-            task_specific = DOWNLOAD_DIR / task_id / clean_name
+        if not target_path and safe_tid:
+            task_specific = DOWNLOAD_DIR / safe_tid / clean_name
             if task_specific.exists() and task_specific.is_file():
                 target_path = task_specific
 
